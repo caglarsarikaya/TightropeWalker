@@ -9,9 +9,8 @@
 6. [User Interface](#user-interface)
 7. [Game Mechanics](#game-mechanics)
 8. [Implementation Guidelines](#implementation-guidelines)
-9. [Testing Strategy](#testing-strategy)
-10. [Deployment Process](#deployment-process)
-11. [Future Enhancements](#future-enhancements)
+9. [Deployment Process](#deployment-process)
+10. [Future Enhancements](#future-enhancements)
 
 ## Introduction
 
@@ -23,16 +22,16 @@ The Tightrope Walker Game is a browser-based 3D game implemented using JavaScrip
 - Implement modular, maintainable code following SOLID principles
 - Develop an extendable architecture for future level additions
 - Ensure smooth performance across modern browsers
+- Ensure AI-generated code follows strict guidelines without introducing unintended logic
 
 ### Target Platforms
-- Modern web browsers with WebGL support
-- Desktop and mobile devices
+- Web browsers with WebGL support 
 
 ### Technical Stack
 - **Frontend**: HTML5, CSS3, JavaScript
 - **3D Rendering**: Three.js
 - **Physics**: Custom physics system
-- **Build Tools**: Webpack
+- **Build Tools**: vite.js
 - **Version Control**: Git
 
 ## System Architecture
@@ -66,6 +65,54 @@ The game follows a component-based architecture with clear separation of concern
 - **Factory Pattern**: For creating game objects
 - **State Pattern**: For managing game states and character states
 - **Command Pattern**: For input handling
+
+
+File Structure
+
+To maintain consistency and readability, the project follows a structured MVVM-based folder organization:
+
+/tightrope-walker-game/
+│── /src/
+│   │── /models/        # Game logic (physics, character, environment)
+│   │   │── Character.js
+│   │   │── Physics.js
+│   │── /viewmodels/    # State management (game state, event handling)
+│   │   │── GameState.js
+│   │── /views/         # UI components (Three.js rendering, DOM elements)
+│   │   │── CameraController.js
+│   │   │── UIManager.js
+│   │── Game.js         # Main entry point, initializes components
+│── /assets/            # Game assets (models, textures, sounds)
+│── /config/            # Configuration files
+│── index.html          # Entry point for the browser
+│── package.json        # Dependencies and scripts
+│── vite.config.js      # Build configuration
+
+Models (/models/): Contains core game logic such as physics, character movement, and collision handling.
+
+ViewModels (/viewmodels/): Manages game state transitions and event-driven logic.
+
+Views (/views/): Handles rendering, UI, and animations.
+
+Game.js: The main entry point that initializes all components.
+
+Assets (/assets/): Stores game assets such as 3D models, textures, and sounds.
+
+
+
+Strict  Implementation Guidelines
+
+To ensure AI-generated code adheres to the intended architecture without introducing unnecessary elements:
+
+Strict Naming Conventions: All class, function, and variable names must match those defined in this document.
+
+No Unspecified Components: AI must not introduce new classes, variables, or game mechanics beyond what is defined here.
+
+Fixed API Definitions: All functions must follow their documented parameters and return values exactly.
+
+Preserve Folder Structure: AI must not restructure the project in any way.
+
+
 
 ## Component Breakdown
 
@@ -336,28 +383,11 @@ Each class has a single responsibility:
 - Document functions and classes with JSDoc comments
 - Follow airbnb style guide where applicable
 
-## Testing Strategy
-
-### Unit Testing
-- Test individual components in isolation
-- Mock dependencies for pure unit tests
-
-### Integration Testing
-- Test interactions between components
-- Verify component communication
-
-### End-to-End Testing
-- Test complete game flow
-- Verify game mechanics work as expected
-
-### Performance Testing
-- Ensure game runs smoothly at 60fps
-- Test on various devices and browsers
 
 ## Deployment Process
 
 ### Build Process
-1. Compile JavaScript using Webpack
+1. Compile JavaScript using vite.js
 2. Optimize assets
 3. Generate production build
 

@@ -1,0 +1,337 @@
+/**
+ * main.css
+ * Main styles for the Tightrope Walker Game
+ * Enhanced with realistic nature-inspired design
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap');
+
+body {
+    margin: 0;
+    overflow: hidden;
+    font-family: 'Montserrat', sans-serif;
+    background-color: #000;
+}
+
+#game-container {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+}
+
+.ui-overlay {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.ui-overlay button {
+    pointer-events: auto;
+}
+
+/* Start Screen */
+#start-screen {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.8) 100%);
+    color: white;
+}
+
+#start-screen h1 {
+    font-size: 4rem;
+    margin-bottom: 0.5rem;
+    text-shadow: 0 0 10px #000, 0 0 20px rgba(0, 128, 255, 0.5);
+    letter-spacing: 3px;
+    animation: glow 2s infinite alternate;
+}
+
+#start-screen p {
+    font-size: 1.2rem;
+    max-width: 600px;
+    text-align: center;
+    margin-bottom: 2rem;
+    text-shadow: 0 0 5px #000;
+    line-height: 1.6;
+}
+
+/* Gameplay UI */
+#gameplay-ui {
+    display: none;
+}
+
+/* End Screen */
+#end-screen {
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: radial-gradient(circle, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.9) 100%);
+    color: white;
+}
+
+#end-screen h1 {
+    font-size: 3.5rem;
+    margin-bottom: 1rem;
+    text-shadow: 0 0 10px #000, 0 0 20px rgba(0, 128, 255, 0.5);
+}
+
+#performance-metrics {
+    font-size: 1.2rem;
+    margin-bottom: 2rem;
+    padding: 1rem 2rem;
+    background-color: rgba(0, 0, 0, 0.5);
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    text-shadow: 0 0 5px #000;
+}
+
+/* Buttons */
+button {
+    padding: 12px 28px;
+    font-size: 1.2rem;
+    font-weight: 600;
+    margin: 10px;
+    cursor: pointer;
+    color: white;
+    border: none;
+    border-radius: 30px;
+    transition: all 0.3s ease;
+    background: linear-gradient(135deg, #3498db, #2980b9);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3), 0 0 10px rgba(52, 152, 219, 0.5);
+    letter-spacing: 1px;
+    position: relative;
+    overflow: hidden;
+}
+
+button:before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+    transition: all 0.6s;
+}
+
+button:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4), 0 0 15px rgba(52, 152, 219, 0.6);
+    background: linear-gradient(135deg, #2980b9, #1c5a85);
+}
+
+button:hover:before {
+    left: 100%;
+}
+
+button:active {
+    transform: translateY(1px);
+}
+
+/* Balance Indicator */
+#balance-indicator {
+    position: absolute;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 300px;
+    height: 25px;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 15px;
+    overflow: hidden;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.3), inset 0 0 5px rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+#balance-marker {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 15px;
+    height: 15px;
+    background-color: white;
+    border-radius: 50%;
+    transition: left 0.2s;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.7);
+}
+
+/* Danger zone indicators in balance bar */
+#balance-indicator:before, #balance-indicator:after {
+    content: '';
+    position: absolute;
+    top: 0;
+    height: 100%;
+    width: 15%;
+    background: linear-gradient(90deg, transparent, rgba(255, 0, 0, 0.5));
+    z-index: 1;
+}
+
+#balance-indicator:before {
+    left: 0;
+    background: linear-gradient(90deg, rgba(255, 0, 0, 0.5), transparent);
+}
+
+#balance-indicator:after {
+    right: 0;
+}
+
+/* Game info */
+.game-info {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    color: white;
+    background-color: rgba(0, 0, 0, 0.5);
+    padding: 15px;
+    border-radius: 10px;
+    font-size: 14px;
+    max-width: 250px;
+    pointer-events: none;
+    backdrop-filter: blur(5px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+}
+
+/* Controls info */
+.controls-info {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    color: white;
+    background-color: rgba(0, 0, 0, 0.5);
+    padding: 15px;
+    border-radius: 10px;
+    font-size: 14px;
+    pointer-events: none;
+    backdrop-filter: blur(5px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+}
+
+.controls-info p {
+    margin: 5px 0;
+}
+
+.controls-info p:first-child {
+    font-weight: bold;
+    margin-bottom: 10px;
+    font-size: 16px;
+}
+
+/* Wind indicator */
+#wind-indicator {
+    position: absolute;
+    top: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: white;
+    text-shadow: 0 0 5px rgba(0, 0, 0, 0.8);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    pointer-events: none;
+    background-color: rgba(0, 0, 0, 0.4);
+    padding: 10px 20px;
+    border-radius: 20px;
+    backdrop-filter: blur(3px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+}
+
+/* Progress bar */
+#progress-container {
+    position: absolute;
+    top: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 300px;
+    height: 10px;
+    background-color: rgba(0, 0, 0, 0.5);
+    border-radius: 5px;
+    overflow: hidden;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.3), inset 0 0 5px rgba(0, 0, 0, 0.5);
+}
+
+#progress-bar {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, #2ecc71, #27ae60);
+    border-radius: 5px;
+    transition: width 0.3s;
+}
+
+/* Animations */
+@keyframes glow {
+    from {
+        text-shadow: 0 0 10px #000, 0 0 20px rgba(0, 128, 255, 0.5);
+    }
+    to {
+        text-shadow: 0 0 15px #000, 0 0 30px rgba(0, 128, 255, 0.8);
+    }
+}
+
+@keyframes shake {
+    0% { transform: translateX(-50%) translateX(0); }
+    25% { transform: translateX(-50%) translateX(var(--shake-intensity, 5px)); }
+    50% { transform: translateX(-50%) translateX(0); }
+    75% { transform: translateX(-50%) translateX(calc(-1 * var(--shake-intensity, 5px))); }
+    100% { transform: translateX(-50%) translateX(0); }
+}
+
+.shaking {
+    animation: shake 0.5s;
+}
+
+/* Visual effects for UI elements */
+.mountain-decoration {
+    position: absolute;
+    bottom: 0;
+    width: 100%;
+    height: 150px;
+    background-image: url('https://i.imgur.com/8zBkPAD.png');
+    background-size: contain;
+    background-repeat: repeat-x;
+    background-position: bottom;
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    #start-screen h1 {
+        font-size: 2.5rem;
+    }
+    
+    #start-screen p {
+        font-size: 1rem;
+        max-width: 90%;
+    }
+    
+    #end-screen h1 {
+        font-size: 2.5rem;
+    }
+    
+    .game-info, .controls-info {
+        font-size: 12px;
+        max-width: 200px;
+        padding: 10px;
+    }
+    
+    button {
+        padding: 10px 20px;
+        font-size: 1rem;
+    }
+    
+    #balance-indicator {
+        width: 250px;
+    }
+    
+    #wind-indicator {
+        font-size: 16px;
+    }
+} 

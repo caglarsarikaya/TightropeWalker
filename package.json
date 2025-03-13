@@ -1,0 +1,23 @@
+{
+  "name": "tightrope-walker-game",
+  "version": "1.0.0",
+  "description": "A browser-based 3D game where a character traverses a tightrope between mountains",
+  "main": "index.html",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "jest"
+  },
+  "dependencies": {
+    "three": "^0.159.0",
+    "postprocessing": "^6.33.3"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "vite": "^5.0.0",
+    "vite-plugin-string": "^1.2.3"
+  },
+  "author": "",
+  "license": "MIT"
+} 

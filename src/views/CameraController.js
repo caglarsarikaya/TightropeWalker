@@ -64,6 +64,13 @@ class CameraController {
         this.velocityX = 0;
         this.velocityY = 0;
         
+        // Enhanced follow target properties
+        this.followTarget = null;
+        this.followOffset = new THREE.Vector3(0, 3, 8);
+        this.followLerpFactor = 0.1; // Smoothing factor (0-1)
+        this.currentTargetPosition = new THREE.Vector3();
+        this.currentLookAtPosition = new THREE.Vector3();
+        
         // Set initial camera position
         this.camera.position.copy(this.startPosition);
         this.currentLookAt.copy(this.startLookAt);
@@ -252,6 +259,51 @@ class CameraController {
     }
     
     /**
+     * Set target for camera to follow
+     * @param {THREE.Object3D} target - Object to follow
+     */
+    setFollowTarget(target) {
+        this.followTarget = target;
+        
+        // Initialize current positions if target is set
+        if (target) {
+            const position = target.position.clone();
+            this.currentTargetPosition.copy(this.camera.position);
+            this.currentLookAtPosition.copy(position);
+        }
+    }
+    
+    /**
+     * Clear the follow target
+     */
+    clearFollowTarget() {
+        this.followTarget = null;
+    }
+    
+    /**
+     * Update camera position when following a target
+     * @param {THREE.Vector3} targetPosition - Target position for camera
+     * @param {THREE.Vector3} lookAtPosition - Position to look at
+     * @param {number} deltaTime - Time since last update
+     */
+    updateFollowPosition(targetPosition, lookAtPosition, deltaTime) {
+        if (!this.enableMouseControls) { // Only update if in auto mode
+            // Smoothly interpolate to the target position
+            this.currentTargetPosition.lerp(targetPosition, this.followLerpFactor);
+            this.currentLookAtPosition.lerp(lookAtPosition, this.followLerpFactor);
+            
+            // Update camera position
+            this.camera.position.copy(this.currentTargetPosition);
+            
+            // Make camera look at target
+            this.camera.lookAt(this.currentLookAtPosition);
+            
+            // Update current look-at for consistency across different camera control modes
+            this.currentLookAt.copy(this.currentLookAtPosition);
+        }
+    }
+    
+    /**
      * Enable or disable mouse controls
      * @param {boolean} enabled - Whether mouse controls should be enabled
      */
@@ -321,10 +373,13 @@ class CameraController {
                 
                 // Look ahead on the rope - closer to character
                 const lookAt = new THREE.Vector3(
-                    0,
+                    characterPos.x,
                     characterPos.y + 1, // Added +1 to look slightly higher
                     characterPos.z - 10 // Was -20, changed to -10 to look closer
                 );
+                
+                // Set follow target for continuous following
+                this.setFollowTarget(this.character.model);
                 
                 // Animate with faster speed for gameplay
                 this.currentAnimationSpeed = 0.15;
@@ -434,15 +489,78 @@ class CameraController {
         } else if (this.enableMouseControls) {
             // Mouse controls are active and no animation is in progress
             // Camera position updates are handled by mouse events
+        } else if (this.followTarget && !this.enableMouseControls) {
+            // Follow target if set and not in mouse control mode
+            this.updateFollowingBehavior(deltaTime);
         } else if (this.character && this.character.model && 
                   !this.character.isOnPlatform && this.character.state !== 'FALLING') {
-            // Follow character during gameplay when not animating and no mouse control
+            // Legacy follow behavior from existing code, when no explicit follow target is set
             this.followTarget(this.character.model.position);
         }
     }
     
     /**
-     * Follow a target with the camera
+     * Update the following behavior
+     * @param {number} deltaTime - Time since last update
+     */
+    updateFollowingBehavior(deltaTime) {
+        if (!this.followTarget) return;
+        
+        const targetPos = this.followTarget.position.clone();
+        
+        // Check if character is on platform to apply direction-based offset
+        if (this.character && this.character.isOnPlatform) {
+            const facingDirection = this.character.facingDirection;
+            
+            // Calculate direction-aware camera position
+            const offset = new THREE.Vector3(
+                Math.sin(facingDirection) * this.followOffset.z,
+                this.followOffset.y,
+                Math.cos(facingDirection) * this.followOffset.z
+            );
+            
+            // Set target position behind character based on facing direction
+            const desiredPosition = new THREE.Vector3(
+                targetPos.x - offset.x,
+                targetPos.y + offset.y,
+                targetPos.z - offset.z
+            );
+            
+            // Smoothly interpolate current position
+            this.camera.position.lerp(desiredPosition, this.followLerpFactor);
+            
+            // Look at position in front of character based on facing direction
+            const lookAhead = new THREE.Vector3(
+                Math.sin(facingDirection) * 5,
+                1,
+                Math.cos(facingDirection) * 5
+            );
+            
+            const lookAtPoint = new THREE.Vector3(
+                targetPos.x + lookAhead.x,
+                targetPos.y + lookAhead.y,
+                targetPos.z + lookAhead.z
+            );
+            
+            this.currentLookAt.lerp(lookAtPoint, this.followLerpFactor * 1.5);
+        } else {
+            // Standard follow behavior for rope walking
+            const desiredPosition = new THREE.Vector3(
+                targetPos.x,
+                targetPos.y + this.followOffset.y,
+                targetPos.z + this.followOffset.z
+            );
+            
+            this.camera.position.lerp(desiredPosition, this.followLerpFactor);
+            this.currentLookAt.lerp(targetPos, this.followLerpFactor * 1.5);
+        }
+        
+        // Update camera to look at the target
+        this.camera.lookAt(this.currentLookAt);
+    }
+    
+    /**
+     * Legacy follow method
      * @param {THREE.Vector3} targetPosition - Position to follow
      */
     followTarget(targetPosition) {

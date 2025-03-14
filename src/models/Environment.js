@@ -20,7 +20,6 @@ class Environment {
         this.lights = [];
         
         // Rope properties
-        this.ropeLength = 100;
         this.ropeSegments = 10;
         this.ropeThickness = 0.3;
         
@@ -594,7 +593,7 @@ class Environment {
         );
         
         // Use more segments for a smoother rope
-        const segments = this.ropeSegments * 2;
+        const segments = this.ropeSegments;
         
         // Calculate a subtle sag amount - adjust the divisor to control tightness
         // Higher values = less sag, lower values = more sag

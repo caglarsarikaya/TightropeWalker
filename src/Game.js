@@ -180,17 +180,39 @@ class Game {
         switch (event.key) {
             case 'ArrowLeft':
             case 'a':
-                this.character.adjustBalance(-1);
+            case 'A':
+                // Check if on platform and call the appropriate function
+                if (this.character.isOnPlatform) {
+                    this.character.moveLeft();
+                } else {
+                    this.character.adjustBalance(-1);
+                }
                 break;
                 
             case 'ArrowRight':
             case 'd':
-                this.character.adjustBalance(1);
+            case 'D':
+                // Check if on platform and call the appropriate function
+                if (this.character.isOnPlatform) {
+                    this.character.moveRight();
+                } else {
+                    this.character.adjustBalance(1);
+                }
                 break;
                 
             case 'ArrowUp':
             case 'w':
+            case 'W':
                 this.character.moveForward();
+                break;
+                
+            case 'ArrowDown':
+            case 's':
+            case 'S':
+                // Only allow backward movement on platform
+                if (this.character.isOnPlatform) {
+                    this.character.moveBackward();
+                }
                 break;
                 
             case 'c':
@@ -211,14 +233,36 @@ class Game {
         switch (event.key) {
             case 'ArrowLeft':
             case 'a':
+            case 'A':
+                if (this.character.isOnPlatform) {
+                    this.character.stopMovingLeft();
+                } else {
+                    this.character.adjustBalance(0); // Reset balance adjustment
+                }
+                break;
+                
             case 'ArrowRight':
             case 'd':
-                this.character.adjustBalance(0); // Reset balance adjustment
+            case 'D':
+                if (this.character.isOnPlatform) {
+                    this.character.stopMovingRight();
+                } else {
+                    this.character.adjustBalance(0); // Reset balance adjustment
+                }
                 break;
                 
             case 'ArrowUp':
             case 'w':
-                // No need to call stopMoving as it's handled with deceleration in Character.update
+            case 'W':
+                this.character.stopMoving();
+                break;
+                
+            case 'ArrowDown':
+            case 's':
+            case 'S':
+                if (this.character.isOnPlatform) {
+                    this.character.stopMovingBackward();
+                }
                 break;
         }
     }
@@ -242,7 +286,7 @@ class Game {
                 characterPos.z + 8   // Was +15, reduced to +8 for closer third-person view
             );
             const lookAt = new THREE.Vector3(
-                0,
+                characterPos.x,
                 characterPos.y + 1, // Added +1 to look slightly higher
                 characterPos.z - 10  // Was -20, changed to -10 to look closer
             );
@@ -251,9 +295,15 @@ class Game {
             
             // Show notification
             this.uiManager.showNotification('Camera Mode: Automatic Following', 2000);
+            
+            // Set follow target to character for continuous following
+            this.cameraController.setFollowTarget(this.character.model);
         } else {
             // Switch to manual camera control
             this.cameraController.setMouseControlsEnabled(true);
+            
+            // Clear follow target when in manual mode
+            this.cameraController.clearFollowTarget();
             
             // Show detailed notification about camera controls
             this.uiManager.showNotification('Camera Mode: Manual Control', 2000);

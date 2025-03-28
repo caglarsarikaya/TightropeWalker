@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tightrope Walker - Mountain Adventure</title>
+    <link rel="icon" type="image/png" href="assets/favicon.png">
+  <script type="module" crossorigin src="/TightropeWalker/assets/index-BdnMWqE9.js"></script>
+  <link rel="modulepreload" crossorigin href="/TightropeWalker/assets/three-DM4aotli.js">
+  <link rel="stylesheet" crossorigin href="/TightropeWalker/assets/index-C0_kSRjt.css">
+</head>
+<body>
+    <div id="game-container"></div>
+    
+    <div id="start-screen" class="ui-overlay">
+        <h1>Tightrope Walker</h1>
+        <p>Brave the winds and traverse the perilous rope between towering mountain peaks. Keep your balance as you journey from one summit to another!</p>
+        <button id="play-button">Begin Journey</button>
+        <div class="mountain-decoration"></div>
+    </div>
+    
+    <div id="gameplay-ui" class="ui-overlay">
+        <div id="balance-indicator">
+            <div id="balance-marker"></div>
+        </div>
+        <div id="wind-indicator">Wind: <span id="wind-direction">None</span></div>
+        <div id="progress-container">
+            <div id="progress-bar"></div>
+        </div>
+        <div class="controls-info">
+            <p>Mountain Controls</p>
+            <p>↑/W: Move Forward</p>
+            <p>←/A: Lean Left</p>
+            <p>→/D: Lean Right</p>
+        </div>
+    </div>
+    
+    <div id="end-screen" class="ui-overlay">
+        <h1 id="end-message">Journey Complete</h1>
+        <p id="performance-metrics"></p>
+        <button id="try-again-button">Try Again</button>
+        <div class="mountain-decoration"></div>
+    </div>
+    
+</body>
+</html> 

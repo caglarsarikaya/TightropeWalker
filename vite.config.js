@@ -10,7 +10,15 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     emptyOutDir: true,
-    sourcemap: true
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'three': ['three'],
+          'postprocessing': ['postprocessing']
+        }
+      }
+    }
   },
   server: {
     open: true

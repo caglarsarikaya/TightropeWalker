@@ -215,6 +215,22 @@ class Game {
                 }
                 break;
                 
+            case 'q':
+            case 'Q':
+                // Rotate character to the left (counterclockwise)
+                if (this.character.isOnPlatform) {
+                    this.character.rotateLeft();
+                }
+                break;
+                
+            case 'e':
+            case 'E':
+                // Rotate character to the right (clockwise)
+                if (this.character.isOnPlatform) {
+                    this.character.rotateRight();
+                }
+                break;
+                
             case 'c':
             case 'C':
                 // Toggle camera mode when 'C' is pressed
@@ -262,6 +278,20 @@ class Game {
             case 'S':
                 if (this.character.isOnPlatform) {
                     this.character.stopMovingBackward();
+                }
+                break;
+                
+            case 'q':
+            case 'Q':
+                if (this.character.isOnPlatform) {
+                    this.character.stopRotatingLeft();
+                }
+                break;
+                
+            case 'e':
+            case 'E':
+                if (this.character.isOnPlatform) {
+                    this.character.stopRotatingRight();
                 }
                 break;
         }

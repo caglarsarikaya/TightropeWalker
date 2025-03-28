@@ -85,7 +85,9 @@ class Character {
             forward: false,  // W key
             backward: false, // S key
             left: false,     // A key
-            right: false     // D key
+            right: false,    // D key
+            rotateLeft: false, // Q key
+            rotateRight: false // E key
         };
         this.platformPosition = new THREE.Vector3(); // Position on platform
         this.platformSpeed = 2.0;  // Movement speed on platforms
@@ -335,9 +337,9 @@ class Character {
                     this.bodyBobHeight *= 0.8;
                 }
                 
-                // Apply bob to vertical position - ADJUSTED TO LOWER CHARACTER HEIGHT
-                // Reduced the height offset to make character stand directly on platform
-                this.model.position.y += this.height/2 - 0.7 + this.bodyBobHeight;
+                // Apply vertical offset to position character directly on platform surface
+                // FURTHER REDUCED OFFSET TO ELIMINATE GAP BETWEEN FEET AND PLATFORM
+                this.model.position.y += this.height/2 - 1.0 + this.bodyBobHeight;
                 
                 // Set character rotation based on facing direction
                 this.model.rotation.y = this.facingDirection;
@@ -360,8 +362,9 @@ class Character {
         // Position character on rope
         this.model.position.copy(point);
         
-        // Raise character to stand on top of rope - ADJUSTED TO MATCH PLATFORM HEIGHT
-        this.model.position.y += this.height / 2 - 0.7 + this.rope.geometry.parameters.radius;
+        // Raise character to stand on top of rope
+        // ADJUSTED TO MATCH PLATFORM HEIGHT REDUCTION
+        this.model.position.y += this.height / 2 - 1.0 + this.rope.geometry.parameters.radius;
         
         // Apply balance offset (lean left/right)
         const rightVector = new THREE.Vector3(1, 0, 0);
@@ -406,33 +409,48 @@ class Character {
         );
         
         // Dot product to check if facing rope
-        const facingRope = facingVector.dot(toRope) > 0.6;
+        const dotProduct = facingVector.dot(toRope);
+        const facingRope = dotProduct > 0.5; // Reduced threshold to make facing detection more forgiving
+        const angleToDegrees = Math.acos(Math.max(-1, Math.min(1, dotProduct))) * (180 / Math.PI);
+        
+        console.log("Distance to rope:", distanceToRopeStart.toFixed(2), 
+                   "Angle to rope:", angleToDegrees.toFixed(1) + "°", 
+                   "Facing rope:", facingRope);
         
         // Update rope proximity states
         const prevNearRope = this.nearRope;
         const prevOnRopeEdge = this.onRopeEdge;
         
-        // Check if near rope
-        this.nearRope = distanceToRopeStart < this.nearRopeDistance && facingRope;
+        // Check if near rope (increased distance threshold significantly)
+        this.nearRope = distanceToRopeStart < this.nearRopeDistance + 1.0 && facingRope;
         
-        // Check if at rope edge
-        this.onRopeEdge = distanceToRopeStart < 1.0 && facingRope;
+        // Check if at rope edge (increased threshold significantly)
+        this.onRopeEdge = distanceToRopeStart < 2.5 && facingRope;
+        
+        // DIRECT ROPE ENTRY: If very close to rope regardless of facing, force rope edge
+        if (distanceToRopeStart < 1.0) {
+            this.onRopeEdge = true;
+            console.log("FORCED ROPE EDGE - very close to rope");
+        }
         
         // Update pole holding mode based on proximity to rope
         if (this.onRopeEdge) {
             if (this.poleHoldMode !== 'TWO_HAND') {
                 this.poleHoldMode = 'TWO_HAND';
                 this.updatePolePosition();
+                console.log("At rope edge - holding pole with two hands");
             }
         } else if (this.nearRope) {
             if (this.poleHoldMode !== 'TWO_HAND') {
                 this.poleHoldMode = 'TWO_HAND';
                 this.updatePolePosition();
+                console.log("Near rope - holding pole with two hands");
             }
         } else {
             if (this.poleHoldMode !== 'ONE_HAND') {
                 this.poleHoldMode = 'ONE_HAND';
                 this.updatePolePosition();
+                console.log("Away from rope - holding pole with one hand");
             }
         }
         
@@ -446,9 +464,13 @@ class Character {
             }
         }
         
-        // If W is pressed while at rope edge, transition to rope
-        if (this.platformMovement.forward && this.onRopeEdge) {
-            this.transitionToRope();
+        // If W is pressed while at rope edge, transition to rope - MORE FORGIVING CONDITIONS
+        if (this.platformMovement.forward && (this.onRopeEdge || distanceToRopeStart < 2.0)) {
+            // Force transition to rope if very close or facing in right general direction
+            if (distanceToRopeStart < 2.5 && (angleToDegrees < 45 || distanceToRopeStart < 1.0)) {
+                console.log("Initiating transition to rope - W pressed at edge");
+                this.transitionToRope();
+            }
         }
     }
     
@@ -1033,7 +1055,26 @@ class Character {
             "W:", this.platformMovement.forward, 
             "S:", this.platformMovement.backward, 
             "A:", this.platformMovement.left, 
-            "D:", this.platformMovement.right);
+            "D:", this.platformMovement.right,
+            "Q:", this.platformMovement.rotateLeft,
+            "E:", this.platformMovement.rotateRight);
+        
+        // Handle rotation first (Q and E keys)
+        if (this.platformMovement.rotateLeft) {
+            // Rotate counterclockwise
+            this.facingDirection += this.platformRotationSpeed * deltaTime;
+            
+            // Update character rotation
+            this.model.rotation.y = this.facingDirection;
+        }
+        
+        if (this.platformMovement.rotateRight) {
+            // Rotate clockwise
+            this.facingDirection -= this.platformRotationSpeed * deltaTime;
+            
+            // Update character rotation
+            this.model.rotation.y = this.facingDirection;
+        }
         
         // Calculate movement direction based on keys pressed
         let moveX = 0;
@@ -1066,6 +1107,7 @@ class Character {
         
         // Calculate current speed
         const isMoving = moveX !== 0 || moveZ !== 0;
+        const isRotating = this.platformMovement.rotateLeft || this.platformMovement.rotateRight;
         
         // Apply movement and animations
         if (isMoving) {
@@ -1116,8 +1158,21 @@ class Character {
             // Update walking animations
             this.updateWalkingAnimations(deltaTime);
             
+        } else if (isRotating) {
+            // Player is rotating in place
+            if (this.state !== 'WALKING') {
+                // Use walking animation when rotating in place 
+                this.state = 'WALKING';
+                this.playWalkingAnimation();
+            }
+            
+            // Slower animation for rotation-only
+            this.footstepCycle += deltaTime * this.platformRotationSpeed * 2;
+            
+            // Update walking animations with slower pace
+            this.updateWalkingAnimations(deltaTime);
         } else {
-            // Slowing down - not moving
+            // Slowing down - not moving or rotating
             this.playerVelocity.multiplyScalar(0.9);
             
             // Reset footstep timer when stopped
@@ -1202,6 +1257,8 @@ class Character {
      * Transition from platform to rope with appropriate animation
      */
     transitionToRope() {
+        console.log("Transitioning to rope...");
+        
         // Play transition animation (could be expanded)
         this.poleHoldMode = 'TWO_HAND';
         this.updatePolePosition();
@@ -1217,9 +1274,14 @@ class Character {
         this.platformMovement.backward = false;
         this.platformMovement.left = false;
         this.platformMovement.right = false;
+        this.platformMovement.rotateLeft = false;
+        this.platformMovement.rotateRight = false;
         
-        // Set walking forward flag if W is still pressed
-        this.isMovingForward = this.platformMovement.forward;
+        // Start moving forward on rope if W is still pressed
+        this.isMovingForward = true; // Start moving forward immediately
+        
+        // Start a step right away for immediate feedback
+        this.startNewStep();
         
         // Reset animation parameters
         this.footstepCycle = 0;
@@ -1228,6 +1290,8 @@ class Character {
         
         // Update position to align with rope start
         this.updatePosition();
+        
+        console.log("Transition complete. isOnPlatform:", this.isOnPlatform, "isMovingForward:", this.isMovingForward);
     }
     
     /**
@@ -1273,6 +1337,7 @@ class Character {
     
     /**
      * Constrain character movement to platform boundaries
+     * With a wider opening at the rope connection point
      */
     constrainToPlatform() {
         if (!this.environment) return;
@@ -1298,16 +1363,117 @@ class Character {
         const dz = this.platformPosition.z - platformPos.z;
         const distanceFromCenter = Math.sqrt(dx * dx + dz * dz);
         
+        // Get the rope start point
+        const ropeStartPoint = this.rope.geometry.parameters.path.getPointAt(0);
+        
+        // Distance to rope
+        const distanceToRope = this.platformPosition.distanceTo(ropeStartPoint);
+        
+        // If very close to the rope, allow movement regardless of platform boundaries
+        if (distanceToRope < 1.5) {
+            console.log("Close to rope - allowing unrestricted movement");
+            
+            // If W is pressed and very close to rope, attempt transition
+            if (this.platformMovement.forward && distanceToRope < 1.0) {
+                console.log("FORCING rope transition from constrainToPlatform");
+                this.transitionToRope();
+            }
+            
+            return; // Skip platform edge constraints
+        }
+        
         // If beyond platform edge, constrain
         if (distanceFromCenter > platformRadius - this.width/2) {
             // Calculate normalized direction from center
             const dirX = dx / distanceFromCenter;
             const dirZ = dz / distanceFromCenter;
             
-            // Set position to edge of platform
-            const newRadius = platformRadius - this.width/2;
-            this.platformPosition.x = platformPos.x + dirX * newRadius;
-            this.platformPosition.z = platformPos.z + dirZ * newRadius;
+            // Direction from platform center to rope
+            const ropeDir = new THREE.Vector3()
+                .subVectors(ropeStartPoint, platformPos)
+                .normalize();
+                
+            // Calculate angle between character's direction and rope direction
+            // Use dot product to find cosine of angle, then convert to degrees
+            const dotProduct = dirX * ropeDir.x + dirZ * ropeDir.z;
+            const angleCos = Math.max(-1, Math.min(1, dotProduct)); // Clamp to prevent floating point errors
+            const angleRadians = Math.acos(angleCos);
+            const angleDegrees = angleRadians * (180 / Math.PI);
+            
+            // If within the 30-degree opening near the rope, allow movement off platform
+            // (15 degrees on either side of the rope direction - much wider than before)
+            const isInRopeOpening = angleDegrees < 15; // Increased from 5 to 15 degrees
+            
+            // If character is trying to go beyond platform but not at rope opening, constrain
+            if (!isInRopeOpening) {
+                // Set position to edge of platform
+                const newRadius = platformRadius - this.width/2;
+                this.platformPosition.x = platformPos.x + dirX * newRadius;
+                this.platformPosition.z = platformPos.z + dirZ * newRadius;
+                
+                console.log("Constrained to platform edge, angle to rope:", angleDegrees.toFixed(1) + "°");
+            } else {
+                // Character is in the rope opening
+                console.log("Character in rope opening, angle to rope:", angleDegrees.toFixed(1) + "°");
+                
+                // If moving toward rope while in the opening, check if we should transition
+                if (this.platformMovement.forward) {
+                    // Vector of current movement
+                    const moveVec = new THREE.Vector3(
+                        Math.sin(this.facingDirection), 
+                        0, 
+                        Math.cos(this.facingDirection)
+                    );
+                    
+                    // Check if moving generally toward rope
+                    const movingTowardRope = moveVec.dot(ropeDir) > 0.3;
+                    
+                    if (movingTowardRope && distanceToRope < 3.0) {
+                        console.log("Moving toward rope in platform opening - initiating transition");
+                        this.transitionToRope();
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * Rotate the character to the left (Q key pressed)
+     */
+    rotateLeft() {
+        console.log("rotateLeft called, isOnPlatform:", this.isOnPlatform);
+        
+        if (this.isOnPlatform) {
+            this.platformMovement.rotateLeft = true;
+        }
+    }
+    
+    /**
+     * Stop rotating left (Q key released)
+     */
+    stopRotatingLeft() {
+        if (this.isOnPlatform) {
+            this.platformMovement.rotateLeft = false;
+        }
+    }
+    
+    /**
+     * Rotate the character to the right (E key pressed)
+     */
+    rotateRight() {
+        console.log("rotateRight called, isOnPlatform:", this.isOnPlatform);
+        
+        if (this.isOnPlatform) {
+            this.platformMovement.rotateRight = true;
+        }
+    }
+    
+    /**
+     * Stop rotating right (E key released)
+     */
+    stopRotatingRight() {
+        if (this.isOnPlatform) {
+            this.platformMovement.rotateRight = false;
         }
     }
 }

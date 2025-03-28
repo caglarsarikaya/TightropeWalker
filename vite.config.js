@@ -4,11 +4,13 @@ import vitePluginString from 'vite-plugin-string';
 
 export default defineConfig({
   root: './',
+  base: '/TightropeWalker/',
   publicDir: 'assets',
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
-    emptyOutDir: true
+    emptyOutDir: true,
+    sourcemap: true
   },
   server: {
     open: true

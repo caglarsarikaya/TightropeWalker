@@ -18,6 +18,7 @@ const GAME_KEYS = new Set(Object.values(ACTION_KEYS).flat());
 class InputController {
     constructor() {
         this.held = new Set();
+        this.virtual = {};
         this.pressListeners = [];
 
         this.onKeyDown = this.onKeyDown.bind(this);
@@ -30,6 +31,13 @@ class InputController {
     }
 
     onKeyDown(event) {
+        // Sliders and other form controls keep their own arrow-key behaviour
+        const target = event.target;
+        const inFormControl = target instanceof HTMLInputElement || target instanceof HTMLSelectElement;
+        if (inFormControl && event.code !== 'Escape') {
+            return;
+        }
+
         if (GAME_KEYS.has(event.code)) {
             // Stop arrow keys from scrolling the page
             event.preventDefault();
@@ -37,7 +45,7 @@ class InputController {
 
         if (!event.repeat) {
             for (const listener of this.pressListeners) {
-                listener(event.code);
+                listener(event.code, event);
             }
         }
 
@@ -51,6 +59,7 @@ class InputController {
     onBlur() {
         // Keys released while the window is unfocused never fire keyup
         this.held.clear();
+        this.virtual = {};
     }
 
     /**
@@ -66,7 +75,20 @@ class InputController {
      * @returns {boolean} Whether any key bound to the action is held
      */
     isDown(action) {
-        return ACTION_KEYS[action].some(code => this.held.has(code));
+        return this.virtual[action] === true || ACTION_KEYS[action].some(code => this.held.has(code));
+    }
+
+    /**
+     * Hold or release an action from on-screen (touch) controls
+     * @param {string} action - One of the ACTION_KEYS names
+     * @param {boolean} held
+     */
+    setVirtual(action, held) {
+        this.virtual[action] = held;
+    }
+
+    clearVirtual() {
+        this.virtual = {};
     }
 
     /**

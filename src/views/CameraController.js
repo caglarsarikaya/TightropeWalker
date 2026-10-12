@@ -66,23 +66,28 @@ class CameraController {
         // Intro blend
         this.intro = null;
 
-        // Mouse
+        // Pointer drag (mouse or touch)
         this.isDragging = false;
+        this.dragPointerId = null;
         this.lastMouseX = 0;
         this.lastMouseY = 0;
+        this.sensitivity = 1;
+        this.invertY = false;
 
         this._v1 = new THREE.Vector3();
         this._v2 = new THREE.Vector3();
 
-        this.onMouseDown = this.onMouseDown.bind(this);
-        this.onMouseMove = this.onMouseMove.bind(this);
-        this.onMouseUp = this.onMouseUp.bind(this);
+        this.onPointerDown = this.onPointerDown.bind(this);
+        this.onPointerMove = this.onPointerMove.bind(this);
+        this.onPointerUp = this.onPointerUp.bind(this);
         this.onWheel = this.onWheel.bind(this);
         this.onContextMenu = event => event.preventDefault();
 
-        domElement.addEventListener('mousedown', this.onMouseDown);
-        window.addEventListener('mousemove', this.onMouseMove);
-        window.addEventListener('mouseup', this.onMouseUp);
+        domElement.style.touchAction = 'none';
+        domElement.addEventListener('pointerdown', this.onPointerDown);
+        window.addEventListener('pointermove', this.onPointerMove);
+        window.addEventListener('pointerup', this.onPointerUp);
+        window.addEventListener('pointercancel', this.onPointerUp);
         domElement.addEventListener('wheel', this.onWheel, { passive: false });
         domElement.addEventListener('contextmenu', this.onContextMenu);
 
@@ -159,31 +164,43 @@ class CameraController {
         return this.mode === 'FOLLOW' || this.mode === 'ORBIT' || this.mode === 'CELEBRATE';
     }
 
-    onMouseDown(event) {
-        if (!this.acceptsMouse()) return;
+    /**
+     * @param {number} sensitivity - Drag multiplier (1 = default)
+     * @param {boolean} invertY - Invert vertical drag
+     */
+    setControls(sensitivity, invertY) {
+        this.sensitivity = sensitivity;
+        this.invertY = invertY;
+    }
+
+    onPointerDown(event) {
+        if (!this.acceptsMouse() || this.dragPointerId !== null) return;
+        this.dragPointerId = event.pointerId;
         this.isDragging = true;
         this.lastMouseX = event.clientX;
         this.lastMouseY = event.clientY;
         this.lastInteraction = this.time;
     }
 
-    onMouseMove(event) {
-        if (!this.isDragging) return;
+    onPointerMove(event) {
+        if (!this.isDragging || event.pointerId !== this.dragPointerId) return;
         const dx = event.clientX - this.lastMouseX;
         const dy = event.clientY - this.lastMouseY;
         this.lastMouseX = event.clientX;
         this.lastMouseY = event.clientY;
 
-        this.userYaw -= dx * 0.005;
+        this.userYaw -= dx * 0.005 * this.sensitivity;
         this.userPitch = THREE.MathUtils.clamp(
-            this.userPitch + dy * 0.004,
+            this.userPitch + dy * 0.004 * this.sensitivity * (this.invertY ? -1 : 1),
             -0.45 - this.config.followPitch,
             1.35 - this.config.followPitch
         );
         this.lastInteraction = this.time;
     }
 
-    onMouseUp() {
+    onPointerUp(event) {
+        if (event.pointerId !== this.dragPointerId) return;
+        this.dragPointerId = null;
         this.isDragging = false;
     }
 
@@ -240,7 +257,14 @@ class CameraController {
             85,
             this.overviewCenter.z + Math.cos(this.overviewAngle) * radius
         );
-        this.currentLookAt.copy(this.overviewCenter);
+        // On wide screens, aim left of the mountains so they sit to the right
+        // of the title text
+        const shift = this.camera.aspect > 1.2 ? 38 : 0;
+        this.currentLookAt.set(
+            this.overviewCenter.x - Math.cos(this.overviewAngle) * shift,
+            this.overviewCenter.y,
+            this.overviewCenter.z + Math.sin(this.overviewAngle) * shift
+        );
         this.camera.lookAt(this.currentLookAt);
     }
 
@@ -313,6 +337,8 @@ class CameraController {
         const lookAhead = THREE.MathUtils.lerp(config.lookAheadPlatform, config.lookAheadRope, character.ropeBlend);
         const forward = character.getForward(this._v2);
         this.followLookAt.copy(this.smoothedTarget).addScaledVector(forward, lookAhead);
+        // Aim slightly low so the walker sits above the balance gauge
+        this.followLookAt.y -= config.lookDown;
 
         this.followInitialized = true;
     }

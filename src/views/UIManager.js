@@ -1,546 +1,459 @@
 /**
  * UIManager.js
- * Manages UI elements, screens, and user interactions
- * Handles UI transitions between different game states
- * Enhanced with realistic mountain-themed UI elements
+ * Orchestrates the interface: screens (title, how to play, settings, pause,
+ * result), the in-game HUD components, keyboard navigation and touch mode.
+ * Markup lives in index.html, styles in src/styles/ui.css.
  */
+
+import * as THREE from 'three';
+import { BalanceGauge } from './ui/BalanceGauge.js';
+import { WindWidget } from './ui/WindWidget.js';
+import { RouteStrip, formatTime } from './ui/RouteStrip.js';
+import { Prompts } from './ui/Prompts.js';
+import { Countdown } from './ui/Countdown.js';
+import { TouchControls } from './ui/TouchControls.js';
+
+const DIFFICULTY_LABELS = { easy: 'Easy', normal: 'Normal', hard: 'Hard' };
+
+const $ = id => document.getElementById(id);
 
 class UIManager {
     /**
-     * Initialize the UI manager
-     * @param {Game} game - Reference to the main game object
+     * @param {Game} game - The running game (state, settings, input, models)
      */
     constructor(game) {
         this.game = game;
-        
-        // Get UI elements
-        this.startScreen = document.getElementById('start-screen');
-        this.gameplayUI = document.getElementById('gameplay-ui');
-        this.endScreen = document.getElementById('end-screen');
-        
-        this.playButton = document.getElementById('play-button');
-        this.tryAgainButton = document.getElementById('try-again-button');
-        this.endMessage = document.getElementById('end-message');
-        this.performanceMetrics = document.getElementById('performance-metrics');
-        
-        this.balanceIndicator = document.getElementById('balance-indicator');
-        this.balanceMarker = document.getElementById('balance-marker');
-        this.windDirectionElement = document.getElementById('wind-direction');
-        this.progressBar = document.getElementById('progress-bar');
-        
-        // Create notification container if it doesn't exist
-        this.createNotificationContainer();
-        
-        // Notification timer
-        this.notificationTimeout = null;
-        
-        // Initialize UI
-        this.setupEventListeners();
-        
-        // Subscribe to game state changes
-        this.game.gameState.addStateChangeListener(this.onGameStateChange.bind(this));
-    }
-    
-    /**
-     * Create the notification container for displaying messages
-     */
-    createNotificationContainer() {
-        let notificationContainer = document.getElementById('notification-container');
-        
-        if (!notificationContainer) {
-            // Create notification container element
-            notificationContainer = document.createElement('div');
-            notificationContainer.id = 'notification-container';
-            notificationContainer.className = 'notification-container';
-            
-            // Create notification element
-            const notification = document.createElement('div');
-            notification.id = 'notification';
-            notification.className = 'notification';
-            
-            // Add to DOM
-            notificationContainer.appendChild(notification);
-            document.body.appendChild(notificationContainer);
-            
-            // Add CSS for notifications
-            this.addNotificationStyles();
-        }
-        
-        this.notificationContainer = notificationContainer;
-        this.notification = document.getElementById('notification');
-    }
-    
-    /**
-     * Add CSS styles for notifications
-     */
-    addNotificationStyles() {
-        const style = document.createElement('style');
-        style.textContent = `
-            .notification-container {
-                position: absolute;
-                top: 20px;
-                right: 20px;
-                z-index: 1000;
-                pointer-events: none;
-            }
-            
-            .notification {
-                background-color: rgba(0, 0, 0, 0.7);
-                color: white;
-                padding: 10px 20px;
-                border-radius: 20px;
-                font-size: 1.1rem;
-                font-weight: 600;
-                text-align: center;
-                opacity: 0;
-                transform: translateY(-20px);
-                transition: opacity 0.3s ease, transform 0.3s ease;
-                box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                backdrop-filter: blur(3px);
-                max-width: 300px;
-            }
-            
-            .notification.visible {
-                opacity: 1;
-                transform: translateY(0);
-            }
-            
-            .controls-panel .section {
-                padding-top: 8px;
-                font-weight: 700;
-                opacity: 0.8;
-            }
+        this.settings = game.settings;
 
-            .controls-panel {
-                position: absolute;
-                bottom: 20px;
-                right: 20px;
-                pointer-events: none;
-                background-color: rgba(0, 0, 0, 0.7);
-                color: white;
-                padding: 15px;
-                border-radius: 10px;
-                font-size: 0.9rem;
-                z-index: 999;
-                box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                backdrop-filter: blur(3px);
-                transition: opacity 0.3s ease;
-                opacity: 0;
-            }
-            
-            .controls-panel.visible {
-                opacity: 1;
-            }
-            
-            .controls-panel h3 {
-                margin: 0 0 10px 0;
-                font-size: 1rem;
-                text-align: center;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-                padding-bottom: 5px;
-            }
-            
-            .controls-panel table {
-                width: 100%;
-                border-collapse: collapse;
-            }
-            
-            .controls-panel td {
-                padding: 3px 5px;
-            }
-            
-            .controls-panel .key {
-                display: inline-block;
-                background-color: rgba(255, 255, 255, 0.2);
-                border-radius: 4px;
-                padding: 2px 6px;
-                margin: 2px;
-                font-weight: bold;
-                text-align: center;
-                min-width: 20px;
-            }
-        `;
-        document.head.appendChild(style);
+        this.root = $('ui');
+        this.screens = {
+            title: $('title-screen'),
+            howto: $('howto-screen'),
+            settings: $('settings-screen'),
+            pause: $('pause-screen'),
+            result: $('result-screen')
+        };
+        this.hud = $('hud');
+        this.vignette = $('danger-vignette');
+        this.helpCard = $('help-card');
+        this.toast = $('toast');
+        this.liveRegion = $('live-region');
+
+        this.modalStack = [];
+        this.toastTimer = null;
+        this._right = new THREE.Vector3();
+        this.last = {};
+
+        // HUD components
+        this.balanceGauge = new BalanceGauge($('balance-gauge'));
+        this.windWidget = new WindWidget($('wind-widget'));
+        this.routeStrip = new RouteStrip($('hud-time'), $('route'));
+        this.prompts = new Prompts($('prompt'), this.settings);
+        this.countdown = new Countdown($('countdown'));
+        this.touchControls = new TouchControls($('touch-controls'), game.input);
+
+        this.setupTouchDetection();
+        this.setupButtons();
+        this.setupSettingsControls();
+        this.setupKeyboard();
+        this.renderRecords();
+
+        $('title-rope-length').textContent = Math.round(game.environment.ropeLength);
+
+        game.gameState.addStateChangeListener(this.onGameStateChange.bind(this));
     }
-    
-    /**
-     * Show a notification message
-     * @param {string} message - Message to display
-     * @param {number} duration - Duration in milliseconds
-     */
-    showNotification(message, duration = 3000) {
-        // Clear any existing timeout
-        if (this.notificationTimeout) {
-            clearTimeout(this.notificationTimeout);
-        }
-        
-        // Set notification text
-        this.notification.textContent = message;
-        
-        // Make notification visible
-        this.notification.classList.add('visible');
-        
-        // Set timeout to hide notification
-        this.notificationTimeout = setTimeout(() => {
-            this.notification.classList.remove('visible');
-        }, duration);
+
+    // ------------------------------------------------------------------
+    // Setup
+    // ------------------------------------------------------------------
+
+    setupTouchDetection() {
+        const query = window.matchMedia('(pointer: coarse)');
+        const apply = () => {
+            this.isTouch = query.matches;
+            document.body.classList.toggle('is-touch', this.isTouch);
+            this.prompts.setTouch(this.isTouch);
+            this.balanceGauge.setTouchLabels(this.isTouch);
+        };
+        apply();
+        query.addEventListener?.('change', apply);
     }
-    
-    /**
-     * Set up event listeners for UI elements
-     */
-    setupEventListeners() {
-        // Both buttons start a fresh run from the start platform
-        this.playButton.addEventListener('click', () => this.game.startRun());
-        this.tryAgainButton.addEventListener('click', () => this.game.startRun());
-    }
-    
-    /**
-     * Handler for game state changes
-     * @param {string} newState - The new game state
-     * @param {string} previousState - The previous game state
-     */
-    onGameStateChange(newState, previousState) {
-        switch (newState) {
-            case 'START_SCREEN':
-                this.showStartScreen();
-                this.hideGameplayUI();
-                this.hideEndScreen();
-                break;
-                
-            case 'GAMEPLAY':
-                this.hideStartScreen();
-                this.showGameplayUI();
-                this.hideEndScreen();
-                
-                // Reset progress bar
-                if (this.progressBar) {
-                    this.progressBar.style.width = '0%';
-                }
-                break;
-                
-            case 'END_SCREEN':
-                // The game calls showEndScreen() with the result message
-                this.hideStartScreen();
-                this.hideGameplayUI();
-                break;
-        }
-    }
-    
-    /**
-     * Show the start screen
-     */
-    showStartScreen() {
-        this.startScreen.style.display = 'flex';
-        
-        // Add subtle animation to the start screen title
-        const title = this.startScreen.querySelector('h1');
-        if (title) {
-            title.style.opacity = 0;
-            title.style.transform = 'translateY(-20px)';
-            
-            setTimeout(() => {
-                title.style.transition = 'opacity 1s ease, transform 1s ease';
-                title.style.opacity = 1;
-                title.style.transform = 'translateY(0)';
-            }, 100);
-        }
-    }
-    
-    /**
-     * Hide the start screen
-     */
-    hideStartScreen() {
-        this.startScreen.style.display = 'none';
-    }
-    
-    /**
-     * Show the gameplay UI
-     */
-    showGameplayUI() {
-        this.gameplayUI.style.display = 'block';
-        
-        // Add fade-in animation to UI elements
-        const uiElements = this.gameplayUI.querySelectorAll('div[id]');
-        uiElements.forEach((element, index) => {
-            element.style.opacity = 0;
-            
-            setTimeout(() => {
-                element.style.transition = 'opacity 0.5s ease';
-                element.style.opacity = 1;
-            }, 100 * index);
+
+    setupButtons() {
+        const game = this.game;
+        const on = (id, handler) => $(id).addEventListener('click', () => {
+            game.sound.init();
+            game.sound.click();
+            handler();
         });
-        
-        // Display controls panel
-        this.showControlsPanel();
-    }
-    
-    /**
-     * Create and show a controls panel
-     */
-    showControlsPanel() {
-        // Check if panel already exists
-        let controlsPanel = document.getElementById('controls-panel');
-        
-        if (!controlsPanel) {
-            // Create panel
-            controlsPanel = document.createElement('div');
-            controlsPanel.id = 'controls-panel';
-            controlsPanel.className = 'controls-panel';
-            
-            // Add controls information
-            controlsPanel.innerHTML = `
-                <h3>Controls</h3>
-                <table>
-                    <tr><td colspan="2" class="section">On the platform</td></tr>
-                    <tr>
-                        <td><span class="key">W</span><span class="key">S</span></td>
-                        <td>Walk forward / back</td>
-                    </tr>
-                    <tr>
-                        <td><span class="key">A</span><span class="key">D</span></td>
-                        <td>Step left / right</td>
-                    </tr>
-                    <tr>
-                        <td><span class="key">Q</span><span class="key">E</span></td>
-                        <td>Turn left / right</td>
-                    </tr>
-                    <tr><td colspan="2" class="section">On the rope</td></tr>
-                    <tr>
-                        <td><span class="key">W</span> / <span class="key">↑</span></td>
-                        <td>Walk forward</td>
-                    </tr>
-                    <tr>
-                        <td><span class="key">A</span> / <span class="key">←</span></td>
-                        <td>Lean left</td>
-                    </tr>
-                    <tr>
-                        <td><span class="key">D</span> / <span class="key">→</span></td>
-                        <td>Lean right</td>
-                    </tr>
-                    <tr><td colspan="2" class="section">Camera</td></tr>
-                    <tr>
-                        <td><span class="key">Drag</span></td>
-                        <td>Look around</td>
-                    </tr>
-                    <tr>
-                        <td><span class="key">Scroll</span></td>
-                        <td>Zoom</td>
-                    </tr>
-                    <tr>
-                        <td><span class="key">C</span></td>
-                        <td>Follow / free orbit</td>
-                    </tr>
-                </table>
-            `;
-            
-            // Add to DOM
-            document.body.appendChild(controlsPanel);
+
+        on('start-button', () => game.startRun());
+        on('howto-button', () => this.openModal('howto'));
+        on('settings-button', () => this.openModal('settings'));
+        on('pause-button', () => game.pause());
+        on('help-button', () => this.toggleHelp());
+        on('resume-button', () => game.resume());
+        on('restart-button', () => game.startRun());
+        on('pause-settings-button', () => this.openModal('settings'));
+        on('quit-button', () => game.quitToTitle());
+        on('retry-button', () => game.startRun());
+        on('menu-button', () => game.quitToTitle());
+
+        for (const button of this.root.querySelectorAll('[data-close]')) {
+            button.addEventListener('click', () => {
+                game.sound.click();
+                this.closeModal();
+            });
         }
-        
-        // Make visible with slight delay
-        setTimeout(() => {
-            controlsPanel.classList.add('visible');
-        }, 500);
-    }
-    
-    /**
-     * Hide the controls panel
-     */
-    hideControlsPanel() {
-        const controlsPanel = document.getElementById('controls-panel');
-        if (controlsPanel) {
-            controlsPanel.classList.remove('visible');
-        }
-    }
-    
-    /**
-     * Hide the gameplay UI
-     */
-    hideGameplayUI() {
-        this.gameplayUI.style.display = 'none';
-        this.hideControlsPanel();
-    }
-    
-    /**
-     * Show the end screen
-     * @param {string} message - The message to display
-     */
-    showEndScreen(message = 'Journey Complete') {
-        this.endScreen.style.display = 'flex';
-        this.endMessage.textContent = message;
-        
-        // Calculate performance metrics
-        const elapsedTime = Math.floor(this.game.runTime);
-        const ropeLength = this.game.environment.ropeLength;
-        const metersWalked = Math.round(this.game.character.progress * ropeLength);
-        const distance = `${metersWalked} m of ${Math.round(ropeLength)} m`;
-        const minutes = Math.floor(elapsedTime / 60);
-        const seconds = elapsedTime % 60;
-        
-        // Format time nicely
-        const timeString = minutes > 0 
-            ? `${minutes} min ${seconds} sec` 
-            : `${seconds} seconds`;
-        
-        // Different messages based on success or failure
-        if (message.includes('fell')) {
-            this.performanceMetrics.innerHTML = `
-                <span style="color: #e74c3c;">❌ You lost your balance!</span><br>
-                Distance: ${distance}<br>
-                Time: ${timeString}
-            `;
-            this.endMessage.style.color = '#e74c3c';
-        } else {
-            this.performanceMetrics.innerHTML = `
-                <span style="color: #2ecc71;">✓ Successfully crossed the rope!</span><br>
-                Time: ${timeString}
-            `;
-            this.endMessage.style.color = '#2ecc71';
-        }
-        
-        // Add subtle animation to the end screen elements
-        const endElements = [this.endMessage, this.performanceMetrics, this.tryAgainButton];
-        endElements.forEach((element, index) => {
-            if (element) {
-                element.style.opacity = 0;
-                element.style.transform = 'translateY(20px)';
-                
-                setTimeout(() => {
-                    element.style.transition = 'opacity 0.8s ease, transform 0.8s ease';
-                    element.style.opacity = 1;
-                    element.style.transform = 'translateY(0)';
-                }, 300 * index);
+
+        // Reset needs a second press to confirm
+        const reset = $('reset-records-button');
+        let armed = false;
+        let disarmTimer = null;
+        reset.addEventListener('click', () => {
+            if (!armed) {
+                armed = true;
+                reset.textContent = 'Press again to confirm';
+                disarmTimer = setTimeout(() => {
+                    armed = false;
+                    reset.textContent = 'Reset records';
+                }, 3000);
+                return;
             }
+            clearTimeout(disarmTimer);
+            armed = false;
+            reset.textContent = 'Reset records';
+            this.settings.resetRecords();
+            this.renderRecords();
+            this.showNotification('Records cleared', 2000);
         });
     }
-    
-    /**
-     * Hide the end screen
-     */
-    hideEndScreen() {
-        this.endScreen.style.display = 'none';
-    }
-    
-    /**
-     * Update the gameplay UI elements
-     * @param {number} balance - Current balance value (-1 to 1)
-     */
-    updateGameplayUI(balance) {
-        // Update balance indicator
-        const balancePercent = 50 + (balance * 50); // Convert to 0-100 range
-        this.balanceMarker.style.left = `${balancePercent}%`;
-        
-        // Change color based on how close to falling
-        const balanceAbs = Math.abs(balance);
-        if (balanceAbs > 0.7) {
-            this.balanceMarker.style.backgroundColor = '#e74c3c'; // Red
-            this.balanceMarker.style.boxShadow = '0 0 8px rgba(231, 76, 60, 0.8)';
-        } else if (balanceAbs > 0.4) {
-            this.balanceMarker.style.backgroundColor = '#f39c12'; // Yellow/Orange
-            this.balanceMarker.style.boxShadow = '0 0 8px rgba(243, 156, 18, 0.8)';
-        } else {
-            this.balanceMarker.style.backgroundColor = 'white';
-            this.balanceMarker.style.boxShadow = '0 0 8px rgba(255, 255, 255, 0.7)';
+
+    setupSettingsControls() {
+        const settings = this.settings;
+
+        for (const group of this.root.querySelectorAll('.segmented[data-setting]')) {
+            const key = group.dataset.setting;
+            for (const button of group.querySelectorAll('button')) {
+                button.addEventListener('click', () => {
+                    this.game.sound.click();
+                    settings.set(key, button.dataset.value);
+                });
+            }
         }
-        
-        // Update wind direction
-        this.updateWindDirection();
-        
-        // Update progress bar
-        this.updateProgressBar();
-    }
-    
-    /**
-     * Update the progress bar based on character position
-     */
-    updateProgressBar() {
-        if (this.progressBar && this.game.character) {
-            const progress = this.game.character.progress * 100;
-            this.progressBar.style.width = `${progress}%`;
-            
-            // Change color as progress increases
-            if (progress > 80) {
-                this.progressBar.style.background = 'linear-gradient(90deg, #2ecc71, #27ae60)';
-            } else if (progress > 50) {
-                this.progressBar.style.background = 'linear-gradient(90deg, #f1c40f, #f39c12)';
+
+        for (const input of this.root.querySelectorAll('input[data-setting]')) {
+            const key = input.dataset.setting;
+            if (input.type === 'checkbox') {
+                input.addEventListener('change', () => settings.set(key, input.checked));
             } else {
-                this.progressBar.style.background = 'linear-gradient(90deg, #3498db, #2980b9)';
+                input.addEventListener('input', () => settings.set(key, parseFloat(input.value)));
             }
         }
+
+        settings.onChange(() => {
+            this.renderSettings();
+            this.renderRecords();
+        });
+        this.renderSettings();
     }
-    
-    /**
-     * Update the wind direction indicator
-     */
-    updateWindDirection() {
-        const physics = this.game.physics;
-        const character = this.game.character;
 
-        if (!physics || !this.windDirectionElement) return;
+    renderSettings() {
+        for (const group of this.root.querySelectorAll('.segmented[data-setting]')) {
+            const value = this.settings.get(group.dataset.setting);
+            for (const button of group.querySelectorAll('button')) {
+                button.setAttribute('aria-checked', String(button.dataset.value === value));
+            }
+        }
+        for (const input of this.root.querySelectorAll('input[data-setting]')) {
+            const value = this.settings.get(input.dataset.setting);
+            if (input.type === 'checkbox') input.checked = value;
+            else input.value = value;
+        }
+    }
 
-        // Wind as the walker feels it: + pushes toward their right
-        const lateralWind = physics.wind * character.getRight().x;
-        const strength = Math.abs(lateralWind);
-        const percent = Math.round((strength / physics.config.maxWind) * 100);
-        const pushesRight = lateralWind > 0;
+    renderRecords() {
+        const records = this.settings.records;
+        $('record-time').textContent = records.bestTime === null ? '—' : formatTime(records.bestTime);
+        $('record-distance').textContent = records.bestDistance > 0 ? `${Math.round(records.bestDistance)} m` : '—';
+        $('record-difficulty').textContent = DIFFICULTY_LABELS[this.settings.get('difficulty')];
+    }
 
-        if (strength < 0.03) {
-            this.windDirectionElement.textContent = 'Calm';
-            this.windDirectionElement.style.color = 'white';
-            this.windDirectionElement.style.animation = 'none';
+    setupKeyboard() {
+        this.game.input.onPress((code, event) => this.onKey(code, event));
+    }
+
+    onKey(code, event) {
+        const game = this.game;
+        const state = game.gameState.currentState;
+        const top = this.modalStack[this.modalStack.length - 1];
+
+        if (code === 'Escape') {
+            if (top === 'howto' || top === 'settings') this.closeModal();
+            else if (top === 'pause') game.resume();
+            else if (top === 'result') game.quitToTitle();
+            else if (state === 'GAMEPLAY') game.pause();
             return;
         }
 
-        let arrows;
-        let color;
-        if (strength > 0.45) {
-            arrows = pushesRight ? '→→→' : '←←←';
-            color = '#e74c3c';
-        } else if (strength > 0.2) {
-            arrows = pushesRight ? '→→' : '←←';
-            color = '#f39c12';
-        } else {
-            arrows = pushesRight ? '→' : '←';
-            color = '#3498db';
+        // Menu navigation with arrows when a menu is showing
+        const menuOpen = top || state === 'START_SCREEN';
+        if (menuOpen && (code === 'ArrowDown' || code === 'ArrowUp' || code === 'ArrowLeft' || code === 'ArrowRight')) {
+            this.navigate(code, event);
+            return;
         }
 
-        this.windDirectionElement.innerHTML =
-            `${pushesRight ? 'Right' : 'Left'} <span style="font-size: 22px;">${arrows}</span> ${percent}%`;
-        this.windDirectionElement.style.color = color;
-
-        // Add subtle animation for strong wind
-        if (strength > 0.45) {
-            this.windDirectionElement.style.animation = 'shake 0.5s infinite';
-        } else {
-            this.windDirectionElement.style.animation = 'none';
+        const onButton = document.activeElement instanceof HTMLButtonElement;
+        if (state === 'START_SCREEN' && !top && (code === 'Enter' || code === 'NumpadEnter') && !onButton) {
+            game.sound.init();
+            game.startRun();
+        } else if (state === 'GAMEPLAY' && (code === 'KeyP')) {
+            game.pause();
+        } else if (state === 'PAUSED' && code === 'KeyP' && top === 'pause') {
+            game.resume();
+        } else if (state === 'GAMEPLAY' && code === 'KeyH') {
+            this.toggleHelp();
+        } else if (top === 'result' && code === 'KeyR') {
+            game.startRun();
         }
     }
-    
+
     /**
-     * Add visual shake effect to UI elements for impact
-     * @param {string} elementId - The ID of the element to shake
-     * @param {number} intensity - Shake intensity (1-5)
+     * Arrow-key focus movement inside the topmost menu
      */
-    shakeElement(elementId, intensity = 3) {
-        const element = document.getElementById(elementId);
-        if (!element) return;
-        
-        // Add shake class if not already present
-        if (!element.classList.contains('shaking')) {
-            element.classList.add('shaking');
-            
-            // Set custom CSS variable for intensity
-            element.style.setProperty('--shake-intensity', `${intensity * 2}px`);
-            
-            // Remove class after animation completes
-            setTimeout(() => {
-                element.classList.remove('shaking');
-            }, 500);
+    navigate(code, event) {
+        const top = this.modalStack[this.modalStack.length - 1];
+        const container = top ? this.screens[top] : this.screens.title;
+        const active = document.activeElement;
+
+        // Left/right inside a segmented control changes its value
+        const segmented = active?.closest?.('.segmented');
+        if (segmented && (code === 'ArrowLeft' || code === 'ArrowRight')) {
+            const buttons = [...segmented.querySelectorAll('button')];
+            const index = buttons.indexOf(active);
+            const next = buttons[Math.max(0, Math.min(buttons.length - 1, index + (code === 'ArrowRight' ? 1 : -1)))];
+            next.focus();
+            next.click();
+            return;
         }
+
+        const focusables = [...container.querySelectorAll('button, input')].filter(el => {
+            if (el.closest('.segmented')) {
+                // One stop per segmented control: its selected option
+                return el.getAttribute('aria-checked') === 'true';
+            }
+            return el.offsetParent !== null;
+        });
+        if (focusables.length === 0) return;
+
+        const index = focusables.indexOf(active);
+        const step = code === 'ArrowDown' || code === 'ArrowRight' ? 1 : -1;
+        const next = index === -1
+            ? focusables[0]
+            : focusables[(index + step + focusables.length) % focusables.length];
+        next.focus();
+        event?.preventDefault();
+    }
+
+    // ------------------------------------------------------------------
+    // Screens
+    // ------------------------------------------------------------------
+
+    onGameStateChange(newState) {
+        switch (newState) {
+            case 'START_SCREEN':
+                this.closeAllModals();
+                this.setHudVisible(false);
+                this.screens.title.classList.add('is-open');
+                this.renderRecords();
+                this.focusFirst(this.screens.title);
+                break;
+            case 'GAMEPLAY':
+                this.closeAllModals();
+                this.screens.title.classList.remove('is-open');
+                this.setHudVisible(true);
+                break;
+            case 'PAUSED':
+                this.helpCard.classList.remove('is-open');
+                this.openModal('pause');
+                this.announce('Game paused');
+                break;
+            case 'END_SCREEN':
+                this.setHudVisible(false);
+                break;
+        }
+    }
+
+    setHudVisible(visible) {
+        this.hud.classList.toggle('is-visible', visible);
+        this.touchControls.setVisible(visible && this.isTouch);
+        if (!visible) {
+            this.helpCard.classList.remove('is-open');
+            this.prompts.show(null);
+            this.countdown.show(null);
+            this.vignette.style.opacity = '0';
+            this.root.classList.remove('is-shaking');
+        }
+    }
+
+    openModal(name) {
+        const screen = this.screens[name];
+        if (this.modalStack.includes(name)) return;
+        this.modalStack.push(name);
+        screen.classList.add('is-open');
+        this.focusFirst(screen);
+    }
+
+    closeModal() {
+        const name = this.modalStack.pop();
+        if (!name) return;
+        this.screens[name].classList.remove('is-open');
+
+        const top = this.modalStack[this.modalStack.length - 1];
+        const container = top ? this.screens[top] : (this.game.gameState.currentState === 'START_SCREEN' ? this.screens.title : null);
+        if (container) this.focusFirst(container);
+    }
+
+    closeAllModals() {
+        while (this.modalStack.length) {
+            this.screens[this.modalStack.pop()].classList.remove('is-open');
+        }
+    }
+
+    focusFirst(container) {
+        const target = container.querySelector('[data-autofocus]') || container.querySelector('button');
+        // Wait for the visibility transition to start so focus is allowed
+        requestAnimationFrame(() => target?.focus({ preventScroll: true }));
+    }
+
+    toggleHelp() {
+        this.helpCard.classList.toggle('is-open');
+    }
+
+    hideLoading() {
+        $('loading').classList.add('is-done');
+    }
+
+    /**
+     * @param {object} result
+     * @param {boolean} result.success
+     * @param {number} result.time - Seconds
+     * @param {number} result.distance - Meters walked along the rope
+     * @param {number} result.ropeLength
+     * @param {number} result.maxWindPercent
+     * @param {boolean} result.newBestTime
+     * @param {boolean} result.newBestDistance
+     */
+    showResult(result) {
+        const screen = this.screens.result;
+        screen.dataset.result = result.success ? 'success' : 'fail';
+
+        $('result-eyebrow').textContent = result.success ? 'Run complete' : 'Lost your footing';
+        $('result-heading').textContent = result.success ? 'Summit reached' : 'You fell';
+        const remaining = Math.max(0, Math.round(result.ropeLength - result.distance));
+        $('result-sub').textContent = result.success
+            ? `Crossed on ${DIFFICULTY_LABELS[this.settings.get('difficulty')]} difficulty.`
+            : `${remaining} m short of the far summit. Lean into the wind earlier.`;
+
+        $('stat-time').textContent = formatTime(result.time);
+        $('stat-distance').textContent = `${Math.round(result.distance)} / ${Math.round(result.ropeLength)} m`;
+        $('stat-wind').textContent = `${Math.round(result.maxWindPercent)}%`;
+
+        const badge = $('result-badge');
+        const badgeText = result.newBestTime ? 'New best time!' : result.newBestDistance ? 'New best distance!' : '';
+        badge.textContent = badgeText;
+        badge.classList.toggle('is-visible', badgeText !== '');
+
+        this.openModal('result');
+        this.announce(`${$('result-heading').textContent}. Time ${formatTime(result.time)}.`);
+        this.renderRecords();
+    }
+
+    showNotification(message, duration = 2500) {
+        clearTimeout(this.toastTimer);
+        this.toast.textContent = message;
+        this.toast.classList.add('is-visible');
+        this.toastTimer = setTimeout(() => this.toast.classList.remove('is-visible'), duration);
+    }
+
+    announce(text) {
+        this.liveRegion.textContent = text;
+    }
+
+    /**
+     * Called at the start of every run
+     */
+    newRun() {
+        this.prompts.newRun();
+        this.helpCard.classList.remove('is-open');
+    }
+
+    // ------------------------------------------------------------------
+    // Per-frame HUD
+    // ------------------------------------------------------------------
+
+    updateHud() {
+        const game = this.game;
+        const character = game.character;
+        const physics = game.physics;
+        const input = game.input.getState();
+        const rightX = character.getRight(this._right).x;
+        const onRope = character.isOnRope;
+        const balance = physics.balance;
+
+        this.routeStrip.update({
+            time: game.runTime,
+            progress: character.progress,
+            ropeLength: game.environment.ropeLength
+        });
+
+        this.balanceGauge.update({
+            balance,
+            left: input.left && onRope,
+            right: input.right && onRope,
+            active: onRope
+        });
+
+        const upcoming = physics.upcomingGust;
+        const gust = onRope && upcoming ? upcoming.wind * rightX : null;
+        this.windWidget.update({
+            lateral: physics.wind * rightX,
+            maxWind: physics.config.maxWind,
+            gust
+        });
+
+        // Red vignette and a slight shake when close to falling
+        const danger = onRope ? Math.max(0, (Math.abs(balance) - 0.55) / 0.45) : 0;
+        const opacity = (Math.round(danger * 20) / 20) * 0.9;
+        if (opacity !== this.last.vignette) {
+            this.last.vignette = opacity;
+            this.vignette.style.opacity = String(opacity);
+        }
+        this.root.classList.toggle('is-shaking', onRope && Math.abs(balance) > 0.85);
+
+        this.prompts.show(this.selectPrompt(gust !== null));
+        this.touchControls.setOnRope(onRope);
+    }
+
+    /**
+     * Which tutorial hint fits the current moment
+     */
+    selectPrompt(gustIncoming) {
+        const game = this.game;
+        const character = game.character;
+        if (!this.settings.get('hints') || game.phase !== 'PLAY') return null;
+
+        if (character.isOnRope) {
+            if (game.ropeTime < 5) return 'balance';
+            if (gustIncoming) return 'gust';
+            return null;
+        }
+        if (character.mode === 'PLATFORM') {
+            if (character.distanceToRopeStart < 3.2) return 'stepOn';
+            if (game.runTime < 6) return 'walk';
+        }
+        return null;
     }
 }
 
-export { UIManager }; 
+export { UIManager };

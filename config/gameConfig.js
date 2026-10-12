@@ -57,6 +57,13 @@ const gameConfig = {
         windStreaks: 260
     },
 
+    // Physics overrides per difficulty (chosen in Settings)
+    difficultyLevels: {
+        easy: { maxLean: 0.7, gravityTorque: 1.8, maxWind: 0.6, stepImpulse: 0.08 },
+        normal: { maxLean: 0.6, gravityTorque: 2.2, maxWind: 0.8, stepImpulse: 0.12 },
+        hard: { maxLean: 0.52, gravityTorque: 2.7, maxWind: 1.0, stepImpulse: 0.16 }
+    },
+
     // Camera settings
     camera: {
         fov: 60,
@@ -67,6 +74,7 @@ const gameConfig = {
         focusHeight: 1.2,
         lookAheadRope: 2.0,
         lookAheadPlatform: 0.6,
+        lookDown: 0.9,          // Aim below the walker so they sit above the HUD gauge
         introDuration: 1.6,
         offsetReturnDelay: 1.5
     }

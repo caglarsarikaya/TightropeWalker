@@ -726,6 +726,18 @@ class Environment {
     /**
      * Thin streaks that drift with the wind so the player can see it
      */
+    /**
+     * Graphics quality: 'high' or 'low' (no sun shadows, fewer wind streaks)
+     */
+    setQuality(quality) {
+        const high = quality !== 'low';
+        if (this.sun) this.sun.castShadow = high;
+        if (this.windStreaks) {
+            const count = high ? this.windStreakOffsets.length : Math.floor(this.windStreakOffsets.length / 3);
+            this.windStreaks.geometry.setDrawRange(0, count * 2);
+        }
+    }
+
     createWindStreaks() {
         const count = this.config.windStreaks;
         const positions = new Float32Array(count * 2 * 3);

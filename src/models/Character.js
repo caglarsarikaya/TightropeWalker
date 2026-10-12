@@ -90,6 +90,7 @@ class Character {
         this.ropeDistance = 0;                // Meters along the rope
         this.ropeSpeed = 0;
         this.lean = 0;                        // Lean angle (rad), + = walker's right, set by physics on the rope
+        this.maxLean = gameConfig.physics.maxLean; // Kept in sync with the difficulty by the game
 
         // Animation state
         this.gaitPhase = 0;
@@ -315,6 +316,14 @@ class Character {
     /**
      * 0..1 of full walking speed on the rope
      */
+    /**
+     * Horizontal distance (m) from the walker to the start of the rope
+     */
+    get distanceToRopeStart() {
+        const p = this.model.position;
+        return Math.hypot(p.x - this.startAnchor.x, p.z - this.startAnchor.z);
+    }
+
     get speedRatio() {
         return clamp(Math.abs(this.ropeSpeed) / this.config.ropeWalkSpeed, 0, 1);
     }
@@ -588,7 +597,7 @@ class Character {
         const env = this.environment;
 
         // Struggling for balance slows you down
-        const balanceFactor = 1 - 0.6 * clamp(Math.abs(this.lean) / gameConfig.physics.maxLean, 0, 1);
+        const balanceFactor = 1 - 0.6 * clamp(Math.abs(this.lean) / this.maxLean, 0, 1);
         let targetSpeed = 0;
         if (input.forward) targetSpeed = c.ropeWalkSpeed * balanceFactor;
         else if (input.back) targetSpeed = -c.ropeBackSpeed;

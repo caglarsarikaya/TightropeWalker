@@ -11,8 +11,32 @@ import gameConfig from '../../config/gameConfig.js';
 
 class Physics {
     constructor(config = gameConfig.physics) {
+        this.baseConfig = config;
         this.config = config;
         this.reset();
+    }
+
+    /**
+     * Apply a difficulty level's overrides on top of the base config
+     * @param {object} overrides - e.g. gameConfig.difficultyLevels.hard
+     */
+    setDifficulty(overrides = {}) {
+        this.config = { ...this.baseConfig, ...overrides };
+    }
+
+    /**
+     * Wind change that is about to happen, so the UI can warn the player
+     * @returns {{timeLeft: number, wind: number} | null}
+     */
+    get upcomingGust() {
+        const timeLeft = this.nextWindChange - this.windTimer;
+        if (timeLeft > 1.2) return null;
+        const big = Math.abs(this.upcomingWind) > 0.3 && Math.abs(this.upcomingWind - this.baseWind) > 0.2;
+        return big ? { timeLeft, wind: this.upcomingWind } : null;
+    }
+
+    randomWind() {
+        return (Math.random() * 2 - 1) * this.maxWindStrength;
     }
 
     /**
@@ -30,6 +54,7 @@ class Physics {
         this.nextWindChange = this.config.windChangeMin;
         this.time = 0;
         this.maxWindStrength = this.config.minWind;
+        this.upcomingWind = this.randomWind(); // Picked ahead of time so gusts can be forecast
     }
 
     /**
@@ -53,7 +78,8 @@ class Physics {
         if (this.windTimer >= this.nextWindChange) {
             this.windTimer = 0;
             this.nextWindChange = c.windChangeMin + Math.random() * (c.windChangeMax - c.windChangeMin);
-            this.targetWind = (Math.random() * 2 - 1) * this.maxWindStrength;
+            this.targetWind = this.upcomingWind;
+            this.upcomingWind = this.randomWind();
         }
 
         // Ease toward the target, frame-rate independent

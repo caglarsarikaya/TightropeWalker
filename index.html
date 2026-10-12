@@ -2,39 +2,217 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tightrope Walker - Mountain Adventure</title>
-    <link rel="icon" type="image/png" href="assets/favicon.png">
-  <script type="module" crossorigin src="/TightropeWalker/assets/index-DTQZw2lg.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0b1a2e">
+    <title>Tightrope Walker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Outfit:wght@300;400;500;600;700;800&display=swap">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M2 28 L11 10 L16 18 L19 14 L30 28 Z' fill='%237fd4ff'/%3E%3Cpath d='M2 9 Q16 15 30 9' stroke='%23f4f8ff' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+  <script type="module" crossorigin src="/TightropeWalker/assets/index-CgCa27DH.js"></script>
   <link rel="modulepreload" crossorigin href="/TightropeWalker/assets/three-BU9E94a-.js">
-  <link rel="stylesheet" crossorigin href="/TightropeWalker/assets/index-CR9Jvfab.css">
+  <link rel="stylesheet" crossorigin href="/TightropeWalker/assets/index-DLkgtcwy.css">
 </head>
 <body>
     <div id="game-container"></div>
-    
-    <div id="start-screen" class="ui-overlay">
-        <h1>Tightrope Walker</h1>
-        <p>Brave the winds and traverse the perilous rope between towering mountain peaks. Keep your balance as you journey from one summit to another!</p>
-        <button id="play-button">Begin Journey</button>
-        <div class="mountain-decoration"></div>
+
+    <div id="ui" class="ui-root">
+        <div class="vignette" id="danger-vignette" aria-hidden="true"></div>
+
+        <!-- ============ HUD ============ -->
+        <section id="hud" class="hud" aria-label="Game status">
+            <header class="hud-top">
+                <div class="glass chip timer-chip">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9 V13 L15 15 M9 2 H15"/></svg>
+                    <span id="hud-time" class="mono">0:00.0</span>
+                </div>
+                <div class="glass route" id="route"></div>
+                <div class="hud-actions">
+                    <button class="btn icon glass" id="help-button" aria-label="Controls (H)" title="Controls (H)">?</button>
+                    <button class="btn icon glass" id="pause-button" aria-label="Pause (Esc)" title="Pause (Esc)">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5 V19 M16 5 V19"/></svg>
+                    </button>
+                </div>
+            </header>
+
+            <div class="hud-bottom">
+                <div class="glass wind-widget" id="wind-widget"></div>
+                <div class="balance-gauge" id="balance-gauge"></div>
+                <div class="hud-bottom-spacer"></div>
+            </div>
+
+            <div class="prompt glass" id="prompt" role="status"></div>
+            <div class="countdown" id="countdown" aria-live="assertive"></div>
+
+            <aside class="glass help-card" id="help-card" aria-label="Controls">
+                <h3>Controls</h3>
+                <div class="help-group">
+                    <span class="help-title">Platform</span>
+                    <div><kbd class="kbd">W</kbd><kbd class="kbd">S</kbd> walk</div>
+                    <div><kbd class="kbd">A</kbd><kbd class="kbd">D</kbd> step sideways</div>
+                    <div><kbd class="kbd">Q</kbd><kbd class="kbd">E</kbd> turn</div>
+                </div>
+                <div class="help-group">
+                    <span class="help-title">Rope</span>
+                    <div><kbd class="kbd">W</kbd> walk forward</div>
+                    <div><kbd class="kbd">A</kbd><kbd class="kbd">D</kbd> lean left / right</div>
+                </div>
+                <div class="help-group">
+                    <span class="help-title">Camera &amp; game</span>
+                    <div><kbd class="kbd">Drag</kbd> look around · <kbd class="kbd">Scroll</kbd> zoom</div>
+                    <div><kbd class="kbd">C</kbd> free orbit · <kbd class="kbd">Esc</kbd> pause</div>
+                </div>
+            </aside>
+
+            <div class="touch-controls" id="touch-controls"></div>
+        </section>
+
+        <!-- ============ Title ============ -->
+        <section id="title-screen" class="screen title-screen" aria-labelledby="title-heading">
+            <div class="title-block">
+                <p class="eyebrow">A high-altitude balancing act</p>
+                <h1 id="title-heading" class="wordmark">Tightrope<span>Walker</span></h1>
+                <p class="pitch">Cross <span id="title-rope-length">94</span> m of swaying rope between two summits. Read the wind, trust your balance, don't look down.</p>
+                <div class="title-actions">
+                    <button class="btn primary large" id="start-button" data-autofocus>
+                        Start climb <kbd class="kbd on-primary">Enter</kbd>
+                    </button>
+                    <button class="btn ghost" id="howto-button">How to play</button>
+                    <button class="btn ghost" id="settings-button">Settings</button>
+                </div>
+                <div class="glass records" id="records">
+                    <div class="record"><span class="record-label">Best time</span><span class="record-value mono" id="record-time">—</span></div>
+                    <div class="record"><span class="record-label">Best distance</span><span class="record-value mono" id="record-distance">—</span></div>
+                    <div class="record"><span class="record-label">Difficulty</span><span class="record-value" id="record-difficulty">Normal</span></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ How to play ============ -->
+        <section id="howto-screen" class="screen modal-screen" role="dialog" aria-modal="true" aria-labelledby="howto-heading">
+            <div class="glass card howto-card">
+                <h2 id="howto-heading">How to play</h2>
+                <ol class="steps">
+                    <li class="step">
+                        <svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="10" r="5"/><path d="M24 16 V30 M24 30 L17 42 M24 30 L31 42 M15 22 H33"/><path class="accent" d="M6 44 H42"/></svg>
+                        <div>
+                            <h3>Walk to the gate</h3>
+                            <p class="keys-only"><kbd class="kbd">W</kbd> walk · <kbd class="kbd">A</kbd><kbd class="kbd">D</kbd> sidestep · <kbd class="kbd">Q</kbd><kbd class="kbd">E</kbd> turn. Keep pushing forward at the gap in the railing to step onto the rope.</p>
+                            <p class="touch-only">Hold <b>WALK</b>. Use ⟲ ⟳ to turn. Keep walking at the gap in the railing to step onto the rope.</p>
+                        </div>
+                    </li>
+                    <li class="step">
+                        <svg viewBox="0 0 48 48" aria-hidden="true"><path class="accent" d="M4 30 Q24 36 44 30"/><circle cx="26" cy="9" r="4"/><path d="M26 14 L24 28 M6 16 L42 20"/><path class="wind" d="M2 6 H12 M4 11 H10"/></svg>
+                        <div>
+                            <h3>Lean against the wind</h3>
+                            <p class="keys-only">On the rope, <kbd class="kbd">A</kbd><kbd class="kbd">D</kbd> lean left and right. Gravity pulls you further once you tip, so correct early and gently.</p>
+                            <p class="touch-only">On the rope, tap <b>◀ ▶</b> to lean. Gravity pulls you further once you tip, so correct early and gently.</p>
+                        </div>
+                    </li>
+                    <li class="step">
+                        <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M4 42 L18 18 L26 30 L31 23 L44 42 Z"/><path class="accent" d="M18 18 V6 L26 9 L18 12"/></svg>
+                        <div>
+                            <h3>Reach the far summit</h3>
+                            <p>Watch the balance gauge and the wind widget. Gusts get stronger the further out you go. Beat your best time!</p>
+                        </div>
+                    </li>
+                </ol>
+                <div class="card-actions">
+                    <button class="btn primary" data-close data-autofocus>Got it</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ Settings ============ -->
+        <section id="settings-screen" class="screen modal-screen" role="dialog" aria-modal="true" aria-labelledby="settings-heading">
+            <div class="glass card settings-card">
+                <h2 id="settings-heading">Settings</h2>
+
+                <div class="setting">
+                    <div class="setting-text"><span class="setting-name">Difficulty</span><span class="setting-hint">Wind strength and how forgiving balance is</span></div>
+                    <div class="segmented" data-setting="difficulty" role="radiogroup" aria-label="Difficulty">
+                        <button role="radio" data-value="easy">Easy</button>
+                        <button role="radio" data-value="normal">Normal</button>
+                        <button role="radio" data-value="hard">Hard</button>
+                    </div>
+                </div>
+
+                <div class="setting">
+                    <div class="setting-text"><span class="setting-name">Graphics</span><span class="setting-hint">Low turns off shadows for smoother play</span></div>
+                    <div class="segmented" data-setting="quality" role="radiogroup" aria-label="Graphics quality">
+                        <button role="radio" data-value="low">Low</button>
+                        <button role="radio" data-value="high">High</button>
+                    </div>
+                </div>
+
+                <label class="setting">
+                    <div class="setting-text"><span class="setting-name">Camera sensitivity</span></div>
+                    <input type="range" class="slider" data-setting="cameraSensitivity" min="0.4" max="2" step="0.1">
+                </label>
+
+                <label class="setting">
+                    <div class="setting-text"><span class="setting-name">Invert camera vertical</span></div>
+                    <input type="checkbox" class="toggle" data-setting="invertY">
+                </label>
+
+                <label class="setting">
+                    <div class="setting-text"><span class="setting-name">Volume</span></div>
+                    <input type="range" class="slider" data-setting="volume" min="0" max="1" step="0.05">
+                </label>
+
+                <label class="setting">
+                    <div class="setting-text"><span class="setting-name">Mute sound</span></div>
+                    <input type="checkbox" class="toggle" data-setting="muted">
+                </label>
+
+                <label class="setting">
+                    <div class="setting-text"><span class="setting-name">Tutorial hints</span><span class="setting-hint">On-screen tips during your first runs</span></div>
+                    <input type="checkbox" class="toggle" data-setting="hints">
+                </label>
+
+                <div class="card-actions split">
+                    <button class="btn ghost danger-text" id="reset-records-button">Reset records</button>
+                    <button class="btn primary" data-close data-autofocus>Done</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ Pause ============ -->
+        <section id="pause-screen" class="screen modal-screen" role="dialog" aria-modal="true" aria-labelledby="pause-heading">
+            <div class="glass card menu-card">
+                <h2 id="pause-heading">Paused</h2>
+                <div class="menu-buttons">
+                    <button class="btn primary" id="resume-button" data-autofocus>Resume <kbd class="kbd on-primary">Esc</kbd></button>
+                    <button class="btn ghost" id="restart-button">Restart run</button>
+                    <button class="btn ghost" id="pause-settings-button">Settings</button>
+                    <button class="btn ghost" id="quit-button">Quit to title</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ Result ============ -->
+        <section id="result-screen" class="screen modal-screen result-screen" role="dialog" aria-modal="true" aria-labelledby="result-heading">
+            <div class="glass card result-card">
+                <p class="eyebrow" id="result-eyebrow">Run complete</p>
+                <h2 id="result-heading">Summit reached</h2>
+                <p class="result-sub" id="result-sub"></p>
+                <div class="stats">
+                    <div class="stat"><span class="stat-label">Time</span><span class="stat-value mono" id="stat-time">—</span></div>
+                    <div class="stat"><span class="stat-label">Distance</span><span class="stat-value mono" id="stat-distance">—</span></div>
+                    <div class="stat"><span class="stat-label">Strongest wind</span><span class="stat-value mono" id="stat-wind">—</span></div>
+                </div>
+                <div class="badge" id="result-badge">New best!</div>
+                <div class="card-actions">
+                    <button class="btn ghost" id="menu-button">Menu</button>
+                    <button class="btn primary" id="retry-button" data-autofocus>Try again <kbd class="kbd on-primary">R</kbd></button>
+                </div>
+            </div>
+        </section>
+
+        <div class="toast glass" id="toast" role="status"></div>
+        <div class="sr-only" id="live-region" aria-live="polite"></div>
+        <div class="loading" id="loading"><div class="spinner"></div><span>Preparing the mountains…</span></div>
     </div>
-    
-    <div id="gameplay-ui" class="ui-overlay">
-        <div id="balance-indicator">
-            <div id="balance-marker"></div>
-        </div>
-        <div id="wind-indicator">Wind: <span id="wind-direction">None</span></div>
-        <div id="progress-container">
-            <div id="progress-bar"></div>
-        </div>
-    </div>
-    
-    <div id="end-screen" class="ui-overlay">
-        <h1 id="end-message">Journey Complete</h1>
-        <p id="performance-metrics"></p>
-        <button id="try-again-button">Try Again</button>
-        <div class="mountain-decoration"></div>
-    </div>
-    
+
 </body>
-</html> 
+</html>

@@ -156,7 +156,7 @@ button:active {
     height: 15px;
     background-color: white;
     border-radius: 50%;
-    transition: left 0.2s;
+    transition: left 0.05s linear;
     box-shadow: 0 0 8px rgba(255, 255, 255, 0.7);
 }
 

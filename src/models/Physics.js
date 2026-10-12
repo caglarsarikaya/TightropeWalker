@@ -1,108 +1,120 @@
 /**
  * Physics.js
- * Handles balance mechanics, forces, and collision detection
- * Implements a simple physics system for the tightrope walker
+ * Balance mechanics and wind for the tightrope walker.
+ *
+ * Balance is modelled as an inverted pendulum: once the walker leans, gravity
+ * pulls them further over, so the player has to actively correct with A/D.
+ * Lean has momentum, which makes over-correction possible.
  */
 
+import gameConfig from '../../config/gameConfig.js';
+
 class Physics {
+    constructor(config = gameConfig.physics) {
+        this.config = config;
+        this.reset();
+    }
+
     /**
-     * Initialize the physics system
+     * Reset balance and wind to a calm starting state
      */
-    constructor() {
-        // Physics constants
-        this.gravity = 9.8;
-        this.windForce = 0;
-        this.windDirection = 0; // -1 (left) to 1 (right)
-        this.balanceThreshold = 0.8; // Character falls if balance exceeds this
-        this.balanceRecoveryRate = 0.1; // Natural balance recovery rate
-        this.windChangeFrequency = 3; // Seconds between wind changes
-        this.maxWindForce = 0.5; // Maximum wind force
-        
-        // Wind timer
+    reset() {
+        this.lean = 0;          // Lean angle in radians (+ = walker's right)
+        this.leanVelocity = 0;  // rad/s
+        this.smoothedInput = 0; // A/D input after ramping (-1..1)
+
+        this.wind = 0;          // Signed wind along world +X (-maxWind..maxWind)
+        this.baseWind = 0;      // Smoothed wind without gusts
+        this.targetWind = 0;
         this.windTimer = 0;
+        this.nextWindChange = this.config.windChangeMin;
+        this.time = 0;
+        this.maxWindStrength = this.config.minWind;
     }
-    
+
     /**
-     * Apply physics forces to the character
-     * @param {Character} character - The character to apply forces to
-     * @param {number} deltaTime - Time since last update in seconds
+     * Normalized balance for the UI: -1 (falling left) to 1 (falling right)
      */
-    applyForces(character, deltaTime) {
-        // Update wind
-        this.updateWind(deltaTime);
-        
-        // Calculate forces based on character state
-        if (character.state === 'WALKING' || character.state === 'BALANCING') {
-            // Apply wind force to balance
-            character.balance += this.windForce * this.windDirection * deltaTime;
-            
-            // Apply movement penalty to balance (faster movement = harder to balance)
-            character.balance += character.speed * (character.balance > 0 ? 0.1 : -0.1) * deltaTime;
-            
-            // Natural balance recovery (tends toward 0)
-            if (character.balance > 0) {
-                character.balance -= this.balanceRecoveryRate * deltaTime;
-            } else if (character.balance < 0) {
-                character.balance += this.balanceRecoveryRate * deltaTime;
-            }
-            
-            // Ensure balance stays within range [-1, 1]
-            character.balance = Math.max(-1, Math.min(1, character.balance));
-        }
+    get balance() {
+        return Math.max(-1, Math.min(1, this.lean / this.config.maxLean));
     }
-    
+
     /**
-     * Update wind effects
-     * @param {number} deltaTime - Time since last update in seconds
+     * Smoothly varying wind with occasional gusts
+     * @param {number} deltaTime - Seconds since last update
+     * @param {number} progress - 0..1 progress along the rope, wind gets stronger
      */
-    updateWind(deltaTime) {
-        // Update wind timer
+    updateWind(deltaTime, progress = 0) {
+        const c = this.config;
+        this.time += deltaTime;
         this.windTimer += deltaTime;
-        
-        // Change wind randomly
-        if (this.windTimer >= this.windChangeFrequency) {
-            this.generateRandomWind();
+        this.maxWindStrength = c.minWind + (c.maxWind - c.minWind) * progress;
+
+        if (this.windTimer >= this.nextWindChange) {
             this.windTimer = 0;
+            this.nextWindChange = c.windChangeMin + Math.random() * (c.windChangeMax - c.windChangeMin);
+            this.targetWind = (Math.random() * 2 - 1) * this.maxWindStrength;
         }
+
+        // Ease toward the target, frame-rate independent
+        const blend = 1 - Math.exp(-c.windResponse * deltaTime);
+        this.baseWind += (this.targetWind - this.baseWind) * blend;
+
+        this.wind = this.baseWind + this.gust();
     }
-    
+
     /**
-     * Generate random wind effects
+     * Low-amplitude gust noise layered on top of the smoothed wind
      */
-    generateRandomWind() {
-        // Random wind direction (-1 to 1)
-        this.windDirection = Math.random() * 2 - 1;
-        
-        // Random wind force (0 to maxWindForce)
-        this.windForce = Math.random() * this.maxWindForce;
+    gust() {
+        const t = this.time;
+        return 0.15 * this.maxWindStrength * Math.sin(t * 1.7) * Math.sin(t * 0.63 + 1.3);
     }
-    
+
     /**
-     * Check if character is balanced
-     * @param {Character} character - The character to check
-     * @returns {boolean} - Whether the character is balanced
+     * Add a sudden kick to the lean velocity (footsteps, wobbles)
+     * @param {number} amount - rad/s
      */
-    checkBalance(character) {
-        // If balance exceeds threshold, character falls
-        if (Math.abs(character.balance) > this.balanceThreshold) {
-            character.state = 'FALLING';
-            return false;
-        }
-        
-        return true;
+    addImpulse(amount) {
+        this.leanVelocity += amount;
     }
-    
+
     /**
-     * Increase difficulty over time
-     * @param {number} progressFactor - Factor between 0 and 1 representing progress
+     * Random kick for a footstep, scaled by walking speed
+     * @param {number} speedRatio - 0..1 of max rope speed
      */
-    increaseDifficulty(progressFactor) {
-        // Increase max wind force based on progress
-        this.maxWindForce = 0.5 + (progressFactor * 0.5);
-        
-        // Decrease balance recovery rate based on progress
-        this.balanceRecoveryRate = 0.1 * (1 - progressFactor * 0.5);
+    addStepImpulse(speedRatio) {
+        const kick = (Math.random() * 2 - 1) * this.config.stepImpulse * (0.5 + speedRatio);
+        this.addImpulse(kick);
+    }
+
+    /**
+     * Integrate the lean of a walker on the rope
+     * @param {number} deltaTime - Seconds since last update
+     * @param {number} inputDirection - -1 (A, lean left) .. 1 (D, lean right)
+     * @param {number} lateralWind - Wind component along the walker's right
+     * @param {number} speedRatio - 0..1 of max rope speed
+     * @returns {boolean} true if the walker has passed the point of no return
+     */
+    updateBalance(deltaTime, inputDirection, lateralWind, speedRatio) {
+        const c = this.config;
+
+        const inputBlend = 1 - Math.exp(-c.inputResponse * deltaTime);
+        this.smoothedInput += (inputDirection - this.smoothedInput) * inputBlend;
+
+        const inputTorque = c.inputTorque + (c.inputTorqueWalking - c.inputTorque) * speedRatio;
+
+        const acceleration =
+            c.gravityTorque * Math.sin(this.lean) +
+            c.windTorque * lateralWind +
+            inputTorque * this.smoothedInput -
+            c.damping * this.leanVelocity;
+
+        this.leanVelocity += acceleration * deltaTime;
+        this.lean += this.leanVelocity * deltaTime;
+
+        return Math.abs(this.lean) > c.maxLean;
     }
 }
 
-export { Physics }; 
+export { Physics };

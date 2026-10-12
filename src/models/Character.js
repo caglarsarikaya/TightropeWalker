@@ -1,1481 +1,856 @@
 /**
  * Character.js
- * Manages the tightrope walker character model, animations, and state
- * Handles movement and balance controls for the character
+ * The tightrope walker: procedural rig, movement on the platforms and the
+ * rope, and the fall sequence.
+ *
+ * The model's origin is at the soles of the feet, so grounding is simply
+ * `model.position.y = surfaceY`. Leaning rotates the whole body around the
+ * feet, which keeps them planted on the rope.
  */
 
 import * as THREE from 'three';
+import gameConfig from '../../config/gameConfig.js';
+
+// Rig dimensions (meters)
+const THIGH = 0.45;
+const SHIN = 0.42;
+const FOOT_HEIGHT = 0.05;
+const LEG = THIGH + SHIN;
+const HIP_HEIGHT = LEG + FOOT_HEIGHT;
+const SHOULDER_Y = 0.53;   // Above the hips
+const UPPER_ARM = 0.29;
+const FOREARM = 0.28;      // Elbow to hand center
+
+// Distance along the rope where the walker stands after stepping on/off
+const ROPE_ENTRY = 0.35;
+const ROPE_EXIT_MARGIN = 0.45;
+
+const MODES = {
+    PLATFORM: 'PLATFORM',
+    STEP_ON: 'STEP_ON',
+    ROPE: 'ROPE',
+    STEP_OFF: 'STEP_OFF',
+    FINISHED: 'FINISHED',
+    FALLING: 'FALLING'
+};
+
+const UP = new THREE.Vector3(0, 1, 0);
+const AXIS_X = new THREE.Vector3(1, 0, 0);
+const AXIS_Z = new THREE.Vector3(0, 0, 1);
+
+// Pole holding poses in spine space
+const POLE_BALANCE_POSITION = new THREE.Vector3(0, SHOULDER_Y - 0.302, 0.415);
+const POLE_BALANCE_QUATERNION = new THREE.Quaternion();
+const POLE_CARRY_POSITION = new THREE.Vector3(-0.26, SHOULDER_Y - 0.51, 0.21);
+const POLE_CARRY_QUATERNION = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI / 2, -0.1));
+
+const lerp = THREE.MathUtils.lerp;
+const clamp = THREE.MathUtils.clamp;
+
+/**
+ * Frame-rate independent smoothing factor
+ */
+function damp(rate, deltaTime) {
+    return 1 - Math.exp(-rate * deltaTime);
+}
+
+/**
+ * Shortest signed difference between two angles
+ */
+function angleDelta(from, to) {
+    let delta = (to - from) % (Math.PI * 2);
+    if (delta > Math.PI) delta -= Math.PI * 2;
+    if (delta < -Math.PI) delta += Math.PI * 2;
+    return delta;
+}
+
+function smoothstep01(x) {
+    const t = clamp(x, 0, 1);
+    return t * t * (3 - 2 * t);
+}
 
 class Character {
     /**
-     * Initialize the character
      * @param {THREE.Scene} scene - The Three.js scene
-     * @param {THREE.Mesh} rope - The rope mesh
-     * @param {Environment} environment - Reference to environment for platform positions
+     * @param {Environment} environment - Provides platform and rope geometry
+     * @param {object} config - Character config section
      */
-    constructor(scene, rope, environment) {
+    constructor(scene, environment, config = gameConfig.character) {
         this.scene = scene;
-        this.rope = rope;
         this.environment = environment;
-        
-        // Character properties
+        this.config = config;
+
         this.model = null;
-        this.mixer = null;
-        this.animations = {};
-        this.currentAnimation = null;
-        this.balance = 0; // -1 (left) to 1 (right)
-        this.speed = 0; // Current movement speed
-        this.maxSpeed = 5; // Maximum movement speed
-        this.position = 0; // Position along rope (0 to 1)
-        this.state = 'IDLE'; // IDLE, WALKING, BALANCING, FALLING
-        this.isOnPlatform = true; // Start on platform
-        this.prevState = ''; // Track previous state for animation changes
-        this.prevBalance = 0; // Track previous balance for animation changes
-        
-        // Body parts for animation
-        this.head = null;
-        this.torso = null;
-        this.leftArm = null;
-        this.rightArm = null;
-        this.leftLeg = null;
-        this.rightLeg = null;
-        this.balancePole = null;
-        
-        // Character dimensions
-        this.height = 2;
-        this.width = 0.5;
-        
-        // Movement properties
-        this.acceleration = 1;
-        this.deceleration = 2;
-        this.balanceForce = 0; // Force applied by player (-1 to 1)
-        
-        // Animation timers
-        this.animationClock = new THREE.Clock();
-        this.walkCycle = 0;
-        this.balanceCycle = 0;
-        
-        // Step-based movement system for rope
-        this.isMovingForward = false; // Track if forward key is being held
-        this.takingStep = false; // Currently in the process of taking a step
-        this.stepDistance = 0.03; // Distance to move in one step (0.03 = 3% of rope length)
-        this.stepTime = 0.5; // Time in seconds to complete one step
-        this.stepTimer = 0; // Timer for current step
-        this.stepStartPosition = 0; // Where the step started
-        this.stepTargetPosition = 0; // Where the step will end
-        this.canTakeNextStep = true; // Whether we can take another step (prevents key repeats)
-        
-        // Balance disturbance properties
-        this.movementBalanceEffect = 0.1; // How much walking affects balance
-        this.windEffect = 0; // Track current wind effect (set by Game.js)
-        this.balanceNoiseTimer = 0; // Timer for random balance disturbances
-        this.balanceNoiseInterval = 0.5; // How often to apply random disturbances
-        this.balanceNoiseMagnitude = 0.01; // Magnitude of random disturbances
-        
-        // Extended balance mechanics
-        this.continuousWalkingTime = 0; // How long player has been walking without stopping
-        this.distanceWalked = 0; // Distance walked without stopping
-        this.maxBalanceDifficulty = 4; // Maximum multiplier for balance difficulty
-        this.balanceRecoveryRate = 0.7; // How quickly balance recovers when stopped
-        this.balanceDifficulty = 1; // Current balance difficulty multiplier
-        this.totalStepsTaken = 0; // Track total steps for balance difficulty
-        
-        // Platform movement properties
-        this.platformMovement = {
-            forward: false,  // W key
-            backward: false, // S key
-            left: false,     // A key
-            right: false,    // D key
-            rotateLeft: false, // Q key
-            rotateRight: false // E key
-        };
-        this.platformPosition = new THREE.Vector3(); // Position on platform
-        this.platformSpeed = 2.0;  // Movement speed on platforms
-        this.platformRotationSpeed = 2.0; // Turning speed on platforms
-        this.facingDirection = 0;  // Direction in radians (0 = +Z axis)
-        this.onRopeEdge = false;   // Flag for when character is at rope edge of platform
-        
-        // Enhanced platform movement
-        this.footstepCycle = 0;    // Cycle for footstep effects
-        this.lastFootstep = 0;     // Time since last footstep
-        this.footstepInterval = 0.4; // Time between footsteps
-        this.bodyBobHeight = 0;    // Current body bob height
-        this.strideBobAmount = 0.04; // How much the body bobs while walking
-        this.nearRope = false;     // If the character is near but not at the rope edge
-        this.nearRopeDistance = 2.0; // Distance to be considered "near" the rope
-        this.poleHoldMode = 'ONE_HAND'; // ONE_HAND or TWO_HAND
-        this.lastMovementDirection = new THREE.Vector2(); // Last movement direction
-        this.playerVelocity = new THREE.Vector3(); // Current velocity
-        this.naturalArmSwing = true; // Whether to use natural arm swings (when not near rope)
+        this.mode = MODES.PLATFORM;
+
+        // Movement state
+        this.heading = 0;                     // Yaw in radians, 0 = facing +Z
+        this.yawVelocity = 0;
+        this.velocity = new THREE.Vector3();  // Platform velocity (XZ)
+        this.ropeDistance = 0;                // Meters along the rope
+        this.ropeSpeed = 0;
+        this.lean = 0;                        // Lean angle (rad), + = walker's right, set by physics on the rope
+
+        // Animation state
+        this.gaitPhase = 0;
+        this.gaitAmount = 0;
+        this.poleBlend = 0;   // 0 = pole carried in one hand, 1 = balancing with both hands
+        this.ropeBlend = 0;   // 0 = normal stance, 1 = feet in line on the rope
+        this.time = 0;
+
+        this.transition = null;
+        this.fall = null;
+
+        // Callbacks wired by the game
+        this.onFootfall = null;
+        this.onReachedEnd = null;
+        this.onFallComplete = null;
+
+        // Platform geometry, filled in load()
+        this.startCenter = new THREE.Vector3();
+        this.endCenter = new THREE.Vector3();
+        this.startAnchor = new THREE.Vector3();
+        this.endAnchor = new THREE.Vector3();
+        this.startRopeDir = new THREE.Vector3(); // From start platform center toward the rope (XZ)
+        this.endRopeDir = new THREE.Vector3();   // From end platform center toward the rope (XZ)
+
+        // Scratch objects
+        this._v1 = new THREE.Vector3();
+        this._v2 = new THREE.Vector3();
+        this._lastPosition = new THREE.Vector3();
+        this._qYaw = new THREE.Quaternion();
+        this._qLean = new THREE.Quaternion();
+        this._qPitch = new THREE.Quaternion();
+        this._qPole = new THREE.Quaternion();
     }
-    
-    /**
-     * Load character model and animations
-     * @returns {Promise} - Promise that resolves when loading is complete
-     */
+
+    // ------------------------------------------------------------------
+    // Construction
+    // ------------------------------------------------------------------
+
     async load() {
-        // Create a realistic humanoid character using primitives
-        this.model = new THREE.Group();
-        
-        // Create materials
-        const skinMaterial = new THREE.MeshStandardMaterial({
-            color: 0xf5d0b0,
-            roughness: 0.7,
-            metalness: 0.1
-        });
-        
-        const clothingMaterial = new THREE.MeshStandardMaterial({
-            color: 0x2244aa,
-            roughness: 0.8,
-            metalness: 0.0
-        });
-        
-        const shoeMaterial = new THREE.MeshStandardMaterial({
-            color: 0x444444,
-            roughness: 0.9,
-            metalness: 0.1
-        });
-        
-        const poleMaterial = new THREE.MeshStandardMaterial({
-            color: 0x8B4513,
-            roughness: 0.9,
-            metalness: 0.1
-        });
-        
-        // Create body parts
-        // Head
-        const headGeometry = new THREE.SphereGeometry(0.25, 16, 16);
-        this.head = new THREE.Mesh(headGeometry, skinMaterial);
-        this.head.position.y = 0.9;
-        this.head.castShadow = true;
-        
-        // Create hair
-        const hairMaterial = new THREE.MeshStandardMaterial({
-            color: 0x3a2410,
-            roughness: 0.9,
-            metalness: 0.0
-        });
-        
-        const hairGeometry = new THREE.SphereGeometry(0.26, 16, 16, 0, Math.PI * 2, 0, Math.PI / 2);
-        const hair = new THREE.Mesh(hairGeometry, hairMaterial);
-        hair.rotation.x = Math.PI * 0.1;
-        hair.position.y = 0.02;
-        hair.position.z = -0.01;
-        this.head.add(hair);
-        
-        // Create face features
-        // Eyes
-        const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
-        const eyeGeometry = new THREE.SphereGeometry(0.035, 8, 8);
-        
-        const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-        leftEye.position.set(0.08, 0.05, 0.22);
-        this.head.add(leftEye);
-        
-        const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-        rightEye.position.set(-0.08, 0.05, 0.22);
-        this.head.add(rightEye);
-        
-        // Torso
-        const torsoGeometry = new THREE.BoxGeometry(0.5, 0.7, 0.3);
-        this.torso = new THREE.Mesh(torsoGeometry, clothingMaterial);
-        this.torso.position.y = 0.45;
-        this.torso.castShadow = true;
-        
-        // Arms
-        const armGeometry = new THREE.CylinderGeometry(0.07, 0.07, 0.5, 8);
-        
-        this.leftArm = new THREE.Group();
-        const leftArmMesh = new THREE.Mesh(armGeometry, skinMaterial);
-        leftArmMesh.position.y = -0.25;
-        this.leftArm.add(leftArmMesh);
-        this.leftArm.position.set(0.3, 0.65, 0);
-        this.leftArm.rotation.z = -0.2;
-        
-        this.rightArm = new THREE.Group();
-        const rightArmMesh = new THREE.Mesh(armGeometry, skinMaterial);
-        rightArmMesh.position.y = -0.25;
-        this.rightArm.add(rightArmMesh);
-        this.rightArm.position.set(-0.3, 0.65, 0);
-        this.rightArm.rotation.z = 0.2;
-        
-        // Hands
-        const handGeometry = new THREE.SphereGeometry(0.08, 8, 8);
-        
-        const leftHand = new THREE.Mesh(handGeometry, skinMaterial);
-        leftHand.position.y = -0.5;
-        this.leftArm.add(leftHand);
-        
-        const rightHand = new THREE.Mesh(handGeometry, skinMaterial);
-        rightHand.position.y = -0.5;
-        this.rightArm.add(rightHand);
-        
-        // Legs
-        const legGeometry = new THREE.CylinderGeometry(0.09, 0.07, 0.6, 8);
-        
-        this.leftLeg = new THREE.Group();
-        const leftLegMesh = new THREE.Mesh(legGeometry, clothingMaterial);
-        leftLegMesh.position.y = -0.3;
-        this.leftLeg.add(leftLegMesh);
-        this.leftLeg.position.set(0.15, 0.1, 0);
-        
-        this.rightLeg = new THREE.Group();
-        const rightLegMesh = new THREE.Mesh(legGeometry, clothingMaterial);
-        rightLegMesh.position.y = -0.3;
-        this.rightLeg.add(rightLegMesh);
-        this.rightLeg.position.set(-0.15, 0.1, 0);
-        
-        // Feet
-        const footGeometry = new THREE.BoxGeometry(0.12, 0.05, 0.2);
-        
-        const leftFoot = new THREE.Mesh(footGeometry, shoeMaterial);
-        leftFoot.position.set(0, -0.6, 0.05);
-        this.leftLeg.add(leftFoot);
-        
-        const rightFoot = new THREE.Mesh(footGeometry, shoeMaterial);
-        rightFoot.position.set(0, -0.6, 0.05);
-        this.rightLeg.add(rightFoot);
-        
-        // Balance pole
-        const poleGeometry = new THREE.CylinderGeometry(0.03, 0.03, 3, 8);
-        this.balancePole = new THREE.Mesh(poleGeometry, poleMaterial);
-        this.balancePole.castShadow = true;
-        
-        // Set initial pole position to one-handed carry
-        this.updatePolePosition();
-        
-        // Assemble character
-        this.model.add(this.head);
-        this.model.add(this.torso);
-        this.model.add(this.leftArm);
-        this.model.add(this.rightArm);
-        this.model.add(this.leftLeg);
-        this.model.add(this.rightLeg);
-        this.model.add(this.balancePole);
-        
-        this.model.castShadow = true;
-        
-        // Position character at start platform
-        this.updatePosition();
-        
+        this.buildRig();
+
+        const env = this.environment;
+        this.startCenter.copy(env.startPlatformPosition);
+        this.endCenter.copy(env.endPlatformPosition);
+        env.getRopeStart(this.startAnchor);
+        env.getRopeEnd(this.endAnchor);
+        this.startRopeDir.subVectors(this.startAnchor, this.startCenter).setY(0).normalize();
+        this.endRopeDir.subVectors(this.endAnchor, this.endCenter).setY(0).normalize();
+
         this.scene.add(this.model);
-        
-        return Promise.resolve();
+        this.reset();
     }
-    
+
+    buildRig() {
+        const skin = new THREE.MeshStandardMaterial({ color: 0xf5d0b0, roughness: 0.7, metalness: 0.1 });
+        const shirt = new THREE.MeshStandardMaterial({ color: 0x2244aa, roughness: 0.8 });
+        const trousers = new THREE.MeshStandardMaterial({ color: 0x1d2333, roughness: 0.85 });
+        const shoes = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9, metalness: 0.1 });
+        const hairMaterial = new THREE.MeshStandardMaterial({ color: 0x3a2410, roughness: 0.9 });
+        const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9, metalness: 0.1 });
+
+        // Root at the soles
+        this.model = new THREE.Group();
+        this.model.name = 'walker';
+
+        // Hips: pivot for both legs and the spine
+        this.body = new THREE.Group();
+        this.body.position.y = HIP_HEIGHT;
+        this.model.add(this.body);
+
+        const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, 0.2), trousers);
+        pelvis.position.y = 0.02;
+        this.body.add(pelvis);
+
+        // Spine (torso, head, arms, pole)
+        this.spine = new THREE.Group();
+        this.body.add(this.spine);
+
+        const torso = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.5, 0.2), shirt);
+        torso.position.y = 0.32;
+        this.spine.add(torso);
+
+        this.head = new THREE.Group();
+        this.head.position.y = 0.62;
+        this.spine.add(this.head);
+
+        const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.08, 8), skin);
+        neck.position.y = 0.0;
+        this.head.add(neck);
+
+        const skull = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 16), skin);
+        skull.position.y = 0.11;
+        this.head.add(skull);
+
+        const hair = new THREE.Mesh(
+            new THREE.SphereGeometry(0.115, 16, 16, 0, Math.PI * 2, 0, Math.PI / 2),
+            hairMaterial
+        );
+        hair.position.set(0, 0.12, -0.01);
+        hair.rotation.x = -0.25;
+        this.head.add(hair);
+
+        const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+        const eyeGeometry = new THREE.SphereGeometry(0.015, 8, 8);
+        for (const side of [1, -1]) {
+            const eye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+            eye.position.set(side * 0.04, 0.13, 0.1);
+            this.head.add(eye);
+        }
+
+        // Arms: shoulder -> elbow -> hand. Character's left is +X.
+        this.arms = {};
+        for (const [name, side] of [['left', 1], ['right', -1]]) {
+            const upper = new THREE.Group();
+            upper.position.set(side * 0.22, SHOULDER_Y, 0);
+
+            const upperMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.045, UPPER_ARM, 8), shirt);
+            upperMesh.position.y = -UPPER_ARM / 2;
+            upper.add(upperMesh);
+
+            const elbow = new THREE.Group();
+            elbow.position.y = -UPPER_ARM;
+            upper.add(elbow);
+
+            const forearmMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.036, FOREARM - 0.02, 8), skin);
+            forearmMesh.position.y = -(FOREARM - 0.02) / 2;
+            elbow.add(forearmMesh);
+
+            const hand = new THREE.Mesh(new THREE.SphereGeometry(0.048, 8, 8), skin);
+            hand.position.y = -FOREARM;
+            elbow.add(hand);
+
+            this.spine.add(upper);
+            this.arms[name] = { upper, elbow, side };
+        }
+
+        // Legs: hip -> knee -> ankle
+        this.legs = {};
+        for (const [name, side] of [['left', 1], ['right', -1]]) {
+            const thigh = new THREE.Group();
+            thigh.position.set(side * 0.1, 0, 0);
+
+            const thighMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.06, THIGH, 8), trousers);
+            thighMesh.position.y = -THIGH / 2;
+            thigh.add(thighMesh);
+
+            const knee = new THREE.Group();
+            knee.position.y = -THIGH;
+            thigh.add(knee);
+
+            const shinMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.045, SHIN, 8), trousers);
+            shinMesh.position.y = -SHIN / 2;
+            knee.add(shinMesh);
+
+            const foot = new THREE.Group();
+            foot.position.y = -SHIN;
+            knee.add(foot);
+
+            const footMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, FOOT_HEIGHT, 0.24), shoes);
+            footMesh.position.set(0, -FOOT_HEIGHT / 2, 0.06);
+            foot.add(footMesh);
+
+            this.body.add(thigh);
+            this.legs[name] = { thigh, knee, foot, side };
+        }
+
+        // Balance pole (a group so it can be detached when falling)
+        this.pole = new THREE.Group();
+        const poleMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 3.2, 8), poleMaterial);
+        poleMesh.rotation.z = Math.PI / 2;
+        this.pole.add(poleMesh);
+        for (const side of [1, -1]) {
+            const weight = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 8), poleMaterial);
+            weight.position.x = side * 1.6;
+            this.pole.add(weight);
+        }
+        this.spine.add(this.pole);
+
+        this.model.traverse(object => {
+            if (object.isMesh) {
+                object.castShadow = true;
+                object.receiveShadow = true;
+            }
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Public state
+    // ------------------------------------------------------------------
+
+    get isOnPlatform() {
+        return this.mode === MODES.PLATFORM || this.mode === MODES.FINISHED;
+    }
+
+    get isOnRope() {
+        return this.mode === MODES.ROPE;
+    }
+
+    get isFalling() {
+        return this.mode === MODES.FALLING;
+    }
+
+    get hasFinished() {
+        return this.mode === MODES.FINISHED;
+    }
+
     /**
-     * Update pole position based on current state
+     * 0..1 progress along the rope
      */
-    updatePolePosition() {
-        if (!this.balancePole) return;
-        
-        if (this.poleHoldMode === 'ONE_HAND') {
-            // Hold pole in right hand, vertically
-            this.balancePole.rotation.set(0, 0, 0); // Vertical pole
-            
-            // Position it near the right hand
-            this.balancePole.position.set(-0.4, 0.4, 0.2);
-            this.balancePole.rotation.z = -Math.PI * 0.05; // Slight angle
-            
-            // Make it a bit shorter for carrying
-            this.balancePole.scale.set(0.9, 0.9, 0.9);
-        } else if (this.poleHoldMode === 'TWO_HAND') {
-            // Hold pole horizontally with both hands
-            this.balancePole.rotation.set(Math.PI / 2, 0, Math.PI / 2); // Horizontal pole
-            this.balancePole.position.set(0, 0.6, 0.1); // Center in front
-            
-            // Return to full scale
-            this.balancePole.scale.set(1, 1, 1);
+    get progress() {
+        switch (this.mode) {
+            case MODES.PLATFORM:
+            case MODES.STEP_ON:
+                return 0;
+            case MODES.STEP_OFF:
+            case MODES.FINISHED:
+                return 1;
+            default:
+                return clamp(this.ropeDistance / this.environment.ropeLength, 0, 1);
         }
     }
-    
+
     /**
-     * Update character position based on state and position
+     * 0..1 of full walking speed on the rope
      */
-    updatePosition() {
-        if (!this.model || !this.rope) return;
-        
-        if (this.isOnPlatform) {
-            // Position character on the platform based on platformPosition
-            if (this.environment) {
-                if (this.platformPosition.length() === 0) {
-                    // Initialize platform position if not set
-                    if (this.environment.startPlatformPosition) {
-                        const platformPos = this.environment.startPlatformPosition;
-                        const platformRadius = this.environment.platformRadius;
-                        const platformHeight = this.environment.platformHeight || 0;
-                        
-                        // Place character on the platform, adjusted from center
-                        this.platformPosition.set(
-                            platformPos.x,
-                            platformPos.y + platformHeight,
-                            platformPos.z - platformRadius * 0.6
-                        );
-                        
-                        console.log("Character positioned on platform at:", this.platformPosition);
-                        
-                        // Look towards the end platform
-                        if (this.environment.endPlatformPosition) {
-                            const lookDirection = new THREE.Vector3()
-                                .copy(this.environment.endPlatformPosition)
-                                .sub(platformPos)
-                                .normalize();
-                            this.facingDirection = Math.atan2(lookDirection.x, lookDirection.z);
-                        }
-                    }
-                }
-                
-                // Position model at platform position
-                this.model.position.copy(this.platformPosition);
-                
-                // Apply body bob for realistic walking
-                if (this.state === 'WALKING') {
-                    // Bob height based on step cycle
-                    this.bodyBobHeight = Math.abs(Math.sin(this.footstepCycle)) * this.strideBobAmount;
-                } else {
-                    // Gradually reduce bob when standing still
-                    this.bodyBobHeight *= 0.8;
-                }
-                
-                // Apply vertical offset to position character directly on platform surface
-                // FURTHER REDUCED OFFSET TO ELIMINATE GAP BETWEEN FEET AND PLATFORM
-                this.model.position.y += this.height/2 - 1.0 + this.bodyBobHeight;
-                
-                // Set character rotation based on facing direction
-                this.model.rotation.y = this.facingDirection;
-                
-                // Check if near or at rope edge
-                this.checkRopeProximity();
-                
-                return;
+    get speedRatio() {
+        return clamp(Math.abs(this.ropeSpeed) / this.config.ropeWalkSpeed, 0, 1);
+    }
+
+    getForward(target = new THREE.Vector3()) {
+        return target.set(Math.sin(this.heading), 0, Math.cos(this.heading));
+    }
+
+    /**
+     * The walker's right-hand direction in world space (horizontal)
+     */
+    getRight(target = new THREE.Vector3()) {
+        return target.set(-Math.cos(this.heading), 0, Math.sin(this.heading));
+    }
+
+    // ------------------------------------------------------------------
+    // Reset
+    // ------------------------------------------------------------------
+
+    reset() {
+        this.mode = MODES.PLATFORM;
+        this.transition = null;
+        this.fall = null;
+
+        this.velocity.set(0, 0, 0);
+        this.yawVelocity = 0;
+        this.ropeDistance = 0;
+        this.ropeSpeed = 0;
+        this.lean = 0;
+        this.gaitPhase = 0;
+        this.gaitAmount = 0;
+        this.poleBlend = 0;
+        this.ropeBlend = 0;
+        this.fallCompleteSent = false;
+
+        // Re-attach the pole if it was dropped during a fall
+        if (this.pole.parent !== this.spine) {
+            this.spine.add(this.pole);
+        }
+
+        // Stand behind the platform center, facing the rope
+        this.model.position.copy(this.startCenter).addScaledVector(this.startRopeDir, -1.5);
+        this.model.position.y = this.environment.getPlatformSurfaceY();
+        this.heading = Math.atan2(this.startRopeDir.x, this.startRopeDir.z);
+        this._lastPosition.copy(this.model.position);
+
+        this.applyTransform();
+        this.updatePose(0, 0, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // Per-frame update
+    // ------------------------------------------------------------------
+
+    /**
+     * @param {number} deltaTime - Seconds since last frame
+     * @param {object} input - Held actions from InputController.getState()
+     */
+    update(deltaTime, input) {
+        this.time += deltaTime;
+        this._lastPosition.copy(this.model.position);
+        const previousHeading = this.heading;
+
+        switch (this.mode) {
+            case MODES.PLATFORM:
+                this.updatePlatform(deltaTime, input, this.startCenter, this.startAnchor, this.startRopeDir);
+                break;
+            case MODES.FINISHED:
+                this.updatePlatform(deltaTime, input, this.endCenter, this.endAnchor, this.endRopeDir);
+                break;
+            case MODES.STEP_ON:
+            case MODES.STEP_OFF:
+                this.updateTransition(deltaTime);
+                break;
+            case MODES.ROPE:
+                this.updateRope(deltaTime, input);
+                break;
+            case MODES.FALLING:
+                this.updateFall(deltaTime);
+                break;
+        }
+
+        if (this.mode !== MODES.ROPE && this.mode !== MODES.FALLING) {
+            // Off the rope, straighten up
+            this.lean *= Math.exp(-5 * deltaTime);
+        }
+
+        // Gait is driven by real ground distance, so feet don't slide
+        const moved = this._v1.subVectors(this.model.position, this._lastPosition).setY(0).length();
+        const turned = Math.abs(angleDelta(previousHeading, this.heading)) * 0.3;
+        const distance = this.mode === MODES.FALLING ? 0 : moved + turned;
+        const speed = deltaTime > 0 ? distance / deltaTime : 0;
+
+        this.updateBlends(deltaTime);
+        this.applyTransform();
+        this.updatePose(deltaTime, distance, speed);
+        this.recoverFromInvalidState();
+    }
+
+    /**
+     * A single NaN in the pose makes the whole model vanish; never let it stick
+     */
+    recoverFromInvalidState() {
+        if (!Number.isFinite(this.gaitPhase) || !Number.isFinite(this.gaitAmount)) {
+            this.gaitPhase = 0;
+            this.gaitAmount = 0;
+        }
+        if (!Number.isFinite(this.lean)) {
+            this.lean = 0;
+        }
+        const p = this.model.position;
+        if (!Number.isFinite(p.x + p.y + p.z) || !Number.isFinite(this.heading)) {
+            console.warn('Walker state became invalid; resetting position');
+            this.reset();
+        }
+    }
+
+    /**
+     * Walking around on a platform with momentum and a railing
+     */
+    updatePlatform(deltaTime, input, center, anchor, ropeDir) {
+        const c = this.config;
+
+        // Q/E turn with a little inertia
+        const turnInput = (input.rotateLeft ? 1 : 0) - (input.rotateRight ? 1 : 0);
+        this.yawVelocity += (turnInput * c.turnSpeed - this.yawVelocity) * damp(12, deltaTime);
+        this.heading += this.yawVelocity * deltaTime;
+
+        const forward = this.getForward(this._v1);
+        const right = this.getRight(this._v2);
+
+        const forwardInput = (input.forward ? 1 : 0) - (input.back ? 1 : 0);
+        const strafeInput = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+
+        const desired = new THREE.Vector3()
+            .addScaledVector(forward, forwardInput * (forwardInput > 0 ? c.platformWalkSpeed : c.platformBackSpeed))
+            .addScaledVector(right, strafeInput * c.platformStrafeSpeed);
+        if (desired.length() > c.platformWalkSpeed) {
+            desired.setLength(c.platformWalkSpeed);
+        }
+
+        // Slow, careful steps close to the drop
+        const distanceToAnchor = Math.hypot(this.model.position.x - anchor.x, this.model.position.z - anchor.z);
+        if (distanceToAnchor < 3) {
+            desired.multiplyScalar(0.55 + 0.45 * (distanceToAnchor / 3));
+        }
+
+        this.velocity.lerp(desired, damp(c.platformAcceleration, deltaTime));
+        this.model.position.addScaledVector(this.velocity, deltaTime);
+
+        const gate = this.constrainToPlatform(center, anchor, ropeDir);
+        this.model.position.y = this.environment.getPlatformSurfaceY();
+
+        // Step onto the rope: at the gate, facing the rope, pushing forward
+        if (this.mode === MODES.PLATFORM && input.forward && gate > 0.3) {
+            const atEdge = Math.hypot(this.model.position.x - anchor.x, this.model.position.z - anchor.z) < 1.0;
+            const facingRope = forward.dot(ropeDir) > 0.6;
+            if (atEdge && facingRope) {
+                this.startStepOn();
             }
         }
-        
-        // If not on platform, position along the rope (existing rope logic)
-        // Calculate position along the rope
-        const curve = this.rope.geometry.parameters.path;
-        const point = curve.getPointAt(this.position);
-        
-        // Calculate rope tangent for orientation
-        const tangent = curve.getTangentAt(this.position);
-        
-        // Position character on rope
-        this.model.position.copy(point);
-        
-        // Raise character to stand on top of rope
-        // ADJUSTED TO MATCH PLATFORM HEIGHT REDUCTION
-        this.model.position.y += this.height / 2 - 1.0 + this.rope.geometry.parameters.radius;
-        
-        // Apply balance offset (lean left/right)
-        const rightVector = new THREE.Vector3(1, 0, 0);
-        this.model.position.add(
-            rightVector.multiplyScalar(this.balance * 0.3)
-        );
-        
-        // Orient character along rope
-        const lookAtPoint = new THREE.Vector3().copy(point).add(tangent);
-        this.model.lookAt(lookAtPoint);
-        
-        // Apply balance to rotation (tilt left/right)
-        this.model.rotation.z = this.balance * Math.PI / 8; // Tilt up to 22.5 degrees
-        
-        // Update animations based on character state
-        this.updateAnimations();
     }
-    
+
     /**
-     * Check if character is near or at the rope edge
+     * Keep the walker inside the railing; the only opening is the rope gate.
+     * @returns {number} 0..1 how far inside the rope gate the walker is
      */
-    checkRopeProximity() {
-        if (!this.environment || !this.rope) return;
-        
-        // Get rope start point
-        const ropeStartPoint = this.rope.geometry.parameters.path.getPointAt(0);
-        
-        // Distance to rope start
-        const distanceToRopeStart = this.platformPosition.distanceTo(ropeStartPoint);
-        
-        // Vector to rope
-        const toRope = new THREE.Vector3()
-            .copy(ropeStartPoint)
-            .sub(this.platformPosition)
-            .normalize();
-        
-        // Direction character is facing (as vector)
-        const facingVector = new THREE.Vector3(
-            Math.sin(this.facingDirection),
+    constrainToPlatform(center, anchor, ropeDir) {
+        const radius = this.environment.platformRadius;
+        const offset = this._v2.set(
+            this.model.position.x - center.x,
             0,
-            Math.cos(this.facingDirection)
+            this.model.position.z - center.z
         );
-        
-        // Dot product to check if facing rope
-        const dotProduct = facingVector.dot(toRope);
-        const facingRope = dotProduct > 0.5; // Reduced threshold to make facing detection more forgiving
-        const angleToDegrees = Math.acos(Math.max(-1, Math.min(1, dotProduct))) * (180 / Math.PI);
-        
-        console.log("Distance to rope:", distanceToRopeStart.toFixed(2), 
-                   "Angle to rope:", angleToDegrees.toFixed(1) + "°", 
-                   "Facing rope:", facingRope);
-        
-        // Update rope proximity states
-        const prevNearRope = this.nearRope;
-        const prevOnRopeEdge = this.onRopeEdge;
-        
-        // Check if near rope (increased distance threshold significantly)
-        this.nearRope = distanceToRopeStart < this.nearRopeDistance + 1.0 && facingRope;
-        
-        // Check if at rope edge (increased threshold significantly)
-        this.onRopeEdge = distanceToRopeStart < 2.5 && facingRope;
-        
-        // DIRECT ROPE ENTRY: If very close to rope regardless of facing, force rope edge
-        if (distanceToRopeStart < 1.0) {
-            this.onRopeEdge = true;
-            console.log("FORCED ROPE EDGE - very close to rope");
+        const distance = offset.length();
+
+        const along = offset.dot(ropeDir);
+        const lateral = Math.abs(offset.x * ropeDir.z - offset.z * ropeDir.x);
+        const gate = along > 0 ? 1 - THREE.MathUtils.smoothstep(lateral, 0.35, 0.65) : 0;
+        const maxDistance = radius - 0.45 + gate * 0.4;
+
+        if (distance > maxDistance) {
+            offset.divideScalar(distance);
+            this.model.position.x = center.x + offset.x * maxDistance;
+            this.model.position.z = center.z + offset.z * maxDistance;
+
+            // Remove the velocity pushing into the railing
+            const outward = this.velocity.dot(offset);
+            if (outward > 0) {
+                this.velocity.addScaledVector(offset, -outward);
+            }
         }
-        
-        // Update pole holding mode based on proximity to rope
-        if (this.onRopeEdge) {
-            if (this.poleHoldMode !== 'TWO_HAND') {
-                this.poleHoldMode = 'TWO_HAND';
-                this.updatePolePosition();
-                console.log("At rope edge - holding pole with two hands");
+
+        return gate;
+    }
+
+    startStepOn() {
+        const env = this.environment;
+        this.mode = MODES.STEP_ON;
+        this.velocity.set(0, 0, 0);
+        this.yawVelocity = 0;
+        this.transition = {
+            time: 0,
+            duration: this.config.stepOnDuration,
+            fromPosition: this.model.position.clone(),
+            fromHeading: this.heading,
+            // Target is evaluated live because the rope moves
+            target: () => {
+                const t = ROPE_ENTRY / env.ropeLength;
+                const position = env.getRopePoint(t).addScaledVector(UP, env.ropeRadius);
+                const tangent = env.getRopeTangent(t);
+                return { position, heading: Math.atan2(tangent.x, tangent.z) };
+            },
+            onComplete: () => {
+                this.mode = MODES.ROPE;
+                this.ropeDistance = ROPE_ENTRY;
+                this.ropeSpeed = this.config.ropeWalkSpeed * 0.4;
             }
-        } else if (this.nearRope) {
-            if (this.poleHoldMode !== 'TWO_HAND') {
-                this.poleHoldMode = 'TWO_HAND';
-                this.updatePolePosition();
-                console.log("Near rope - holding pole with two hands");
+        };
+    }
+
+    startStepOff() {
+        const env = this.environment;
+        this.mode = MODES.STEP_OFF;
+        const landing = this.endAnchor.clone().addScaledVector(this.endRopeDir, -1.4);
+        landing.y = env.getPlatformSurfaceY();
+        const towardCenter = new THREE.Vector3().subVectors(this.endCenter, landing).setY(0).normalize();
+        const landingHeading = Math.atan2(towardCenter.x, towardCenter.z);
+
+        this.transition = {
+            time: 0,
+            duration: this.config.stepOffDuration,
+            fromPosition: this.model.position.clone(),
+            fromHeading: this.heading,
+            target: () => ({ position: landing, heading: landingHeading }),
+            onComplete: () => {
+                this.mode = MODES.FINISHED;
+                this.ropeSpeed = 0;
+                if (this.onReachedEnd) this.onReachedEnd();
             }
+        };
+    }
+
+    /**
+     * Short scripted move between the platform and the rope
+     */
+    updateTransition(deltaTime) {
+        const transition = this.transition;
+        transition.time += deltaTime;
+        const k = smoothstep01(transition.time / transition.duration);
+        const target = transition.target();
+
+        this.model.position.lerpVectors(transition.fromPosition, target.position, k);
+        // A small lift as the foot steps up/down
+        this.model.position.y += Math.sin(Math.PI * k) * 0.12;
+        this.heading = transition.fromHeading + angleDelta(transition.fromHeading, target.heading) * k;
+
+        if (transition.time >= transition.duration) {
+            this.model.position.copy(target.position);
+            this.heading = target.heading;
+            this.transition = null;
+            transition.onComplete();
+        }
+    }
+
+    /**
+     * Walking along the rope. Balance itself is handled by Physics.
+     */
+    updateRope(deltaTime, input) {
+        const c = this.config;
+        const env = this.environment;
+
+        // Struggling for balance slows you down
+        const balanceFactor = 1 - 0.6 * clamp(Math.abs(this.lean) / gameConfig.physics.maxLean, 0, 1);
+        let targetSpeed = 0;
+        if (input.forward) targetSpeed = c.ropeWalkSpeed * balanceFactor;
+        else if (input.back) targetSpeed = -c.ropeBackSpeed;
+
+        const speedingUp = Math.abs(targetSpeed) > Math.abs(this.ropeSpeed) &&
+            Math.sign(targetSpeed) === Math.sign(this.ropeSpeed || targetSpeed);
+        const rate = speedingUp ? c.ropeAcceleration : c.ropeDeceleration;
+        const step = rate * deltaTime;
+        if (Math.abs(targetSpeed - this.ropeSpeed) <= step) {
+            this.ropeSpeed = targetSpeed;
         } else {
-            if (this.poleHoldMode !== 'ONE_HAND') {
-                this.poleHoldMode = 'ONE_HAND';
-                this.updatePolePosition();
-                console.log("Away from rope - holding pole with one hand");
+            this.ropeSpeed += Math.sign(targetSpeed - this.ropeSpeed) * step;
+        }
+
+        this.ropeDistance += this.ropeSpeed * deltaTime;
+        if (this.ropeDistance < ROPE_ENTRY) {
+            this.ropeDistance = ROPE_ENTRY;
+            this.ropeSpeed = Math.max(0, this.ropeSpeed);
+        }
+
+        const t = this.ropeDistance / env.ropeLength;
+        env.getRopePoint(t, this.model.position).addScaledVector(UP, env.ropeRadius);
+        const tangent = env.getRopeTangent(t, this._v1);
+        this.heading = Math.atan2(tangent.x, tangent.z);
+
+        if (this.ropeDistance >= env.ropeLength - ROPE_EXIT_MARGIN) {
+            this.startStepOff();
+        }
+    }
+
+    /**
+     * Start falling off the rope
+     * @param {number} direction - Sign of the lean (+1 right, -1 left)
+     */
+    startFall(direction) {
+        if (this.mode === MODES.FALLING) return;
+        const side = Math.sign(direction) || 1;
+
+        const right = this.getRight(new THREE.Vector3());
+        const forward = this.getForward(new THREE.Vector3());
+
+        this.mode = MODES.FALLING;
+        this.fall = {
+            time: 0,
+            side,
+            velocity: new THREE.Vector3()
+                .addScaledVector(right, side * 1.4)
+                .addScaledVector(forward, this.ropeSpeed)
+                .addScaledVector(UP, 0.6),
+            leanVelocity: side * 2.0,
+            pitch: 0,
+            landed: false,
+            poleVelocity: new THREE.Vector3()
+                .addScaledVector(right, -side * 0.8)
+                .addScaledVector(UP, 1.2),
+            poleSpin: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, side * 2.5)
+        };
+
+        // Let go of the pole: keep its world transform but move it to the scene
+        this.scene.attach(this.pole);
+    }
+
+    updateFall(deltaTime) {
+        const fall = this.fall;
+        fall.time += deltaTime;
+        const groundY = -10;
+
+        if (!fall.landed) {
+            fall.velocity.y -= 9.8 * deltaTime;
+            this.model.position.addScaledVector(fall.velocity, deltaTime);
+
+            // Tumble: keep rotating over toward the side of the fall
+            fall.leanVelocity += fall.side * 3 * deltaTime;
+            this.lean += fall.leanVelocity * deltaTime;
+            fall.pitch += 0.6 * deltaTime;
+
+            if (this.model.position.y <= groundY) {
+                this.model.position.y = groundY;
+                fall.landed = true;
             }
         }
-        
-        // Handle transition when state changes
-        if (prevNearRope !== this.nearRope || prevOnRopeEdge !== this.onRopeEdge) {
-            // Update animations for the new state
-            if (this.state === 'WALKING') {
-                this.playWalkingAnimation();
-            } else {
-                this.playIdleAnimation();
+
+        // The dropped pole falls on its own
+        if (this.pole.parent === this.scene && this.pole.position.y > groundY + 0.05) {
+            fall.poleVelocity.y -= 9.8 * deltaTime;
+            this.pole.position.addScaledVector(fall.poleVelocity, deltaTime);
+            this.pole.rotation.x += fall.poleSpin.x * deltaTime;
+            this.pole.rotation.y += fall.poleSpin.y * deltaTime;
+            this.pole.rotation.z += fall.poleSpin.z * deltaTime;
+        }
+
+        if (!this.fallCompleteSent && fall.time >= this.config.fallEndDelay) {
+            this.fallCompleteSent = true;
+            if (this.onFallComplete) this.onFallComplete();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Animation
+    // ------------------------------------------------------------------
+
+    updateBlends(deltaTime) {
+        let ropeTarget = 0;
+        let poleTarget = 0;
+
+        switch (this.mode) {
+            case MODES.STEP_ON:
+            case MODES.ROPE:
+                ropeTarget = 1;
+                poleTarget = 1;
+                break;
+            case MODES.STEP_OFF:
+                poleTarget = 1;
+                break;
+            case MODES.PLATFORM: {
+                // Take the pole in both hands when approaching the rope
+                const distance = Math.hypot(
+                    this.model.position.x - this.startAnchor.x,
+                    this.model.position.z - this.startAnchor.z
+                );
+                poleTarget = 1 - THREE.MathUtils.smoothstep(distance, 2.5, 4.0);
+                break;
             }
+            case MODES.FALLING:
+                poleTarget = this.poleBlend;
+                ropeTarget = this.ropeBlend;
+                break;
         }
-        
-        // If W is pressed while at rope edge, transition to rope - MORE FORGIVING CONDITIONS
-        if (this.platformMovement.forward && (this.onRopeEdge || distanceToRopeStart < 2.0)) {
-            // Force transition to rope if very close or facing in right general direction
-            if (distanceToRopeStart < 2.5 && (angleToDegrees < 45 || distanceToRopeStart < 1.0)) {
-                console.log("Initiating transition to rope - W pressed at edge");
-                this.transitionToRope();
-            }
-        }
+
+        this.ropeBlend += (ropeTarget - this.ropeBlend) * damp(5, deltaTime);
+        this.poleBlend += (poleTarget - this.poleBlend) * damp(4, deltaTime);
     }
-    
+
     /**
-     * Play idle animation - for platform or rope
+     * Root transform: heading, then lean around the feet
      */
-    playIdleAnimation() {
-        if (this.isOnPlatform) {
-            // Platform idle animation
-            if (this.nearRope || this.onRopeEdge) {
-                // Near rope - ready stance
-                this.leftArm.rotation.set(0, 0, -0.3);
-                this.rightArm.rotation.set(0, 0, 0.3);
-                this.leftLeg.rotation.set(0.1, 0, 0);
-                this.rightLeg.rotation.set(0.1, 0, 0);
-                
-                // Look down at rope a bit
-                this.head.rotation.set(0.2, 0, 0);
-            } else {
-                // Regular idle stance with pole in one hand
-                this.leftArm.rotation.set(0, 0, -0.2);
-                this.rightArm.rotation.set(0.2, 0, 0.3); // Right arm holding pole
-                this.leftLeg.rotation.set(0, 0, 0);
-                this.rightLeg.rotation.set(0, 0, 0);
-                this.head.rotation.set(0, 0, 0);
-            }
-        } else {
-            // Rope idle animation - Use existing animation
-            this.leftArm.rotation.set(0, 0, -0.2);
-            this.rightArm.rotation.set(0, 0, 0.2);
-            this.leftLeg.rotation.set(0, 0, 0);
-            this.rightLeg.rotation.set(0, 0, 0);
-            this.head.rotation.set(0, 0, 0);
-            this.torso.rotation.set(0, 0, 0);
-        }
-        
-        // Update pole position based on context
-        this.updatePolePosition();
+    applyTransform() {
+        const pitch = this.fall ? this.fall.pitch : 0;
+        this._qYaw.setFromAxisAngle(UP, this.heading);
+        this._qLean.setFromAxisAngle(AXIS_Z, this.lean);
+        this._qPitch.setFromAxisAngle(AXIS_X, pitch);
+        this.model.quaternion.copy(this._qYaw).multiply(this._qLean).multiply(this._qPitch);
     }
-    
+
     /**
-     * Play walking animation - for platform or rope
+     * Procedural walk cycle, balance reactions and falling pose
+     * @param {number} deltaTime
+     * @param {number} distance - Ground distance covered this frame
+     * @param {number} speed - Ground speed (m/s)
      */
-    playWalkingAnimation() {
-        if (this.isOnPlatform) {
-            if (this.nearRope || this.onRopeEdge) {
-                // Careful walking near rope edge
-                this.leftArm.rotation.set(0, 0, -0.3);
-                this.rightArm.rotation.set(0, 0, 0.3);
-                
-                // Shorter steps
-                this.footstepInterval = 0.6;
-            } else {
-                // Normal walking on platform
-                this.leftArm.rotation.set(0, 0, -0.2);
-                this.rightArm.rotation.set(0.2, 0, 0.3); // Adjusted for pole
-                
-                // Regular step interval
-                this.footstepInterval = 0.4;
-            }
-        } else {
-            // Rope walking animation - use existing rope walking
-            this.leftArm.rotation.set(0, 0, -0.2);
-            this.rightArm.rotation.set(0, 0, 0.2);
-        }
-        
-        // Update pole position based on context
-        this.updatePolePosition();
-    }
-    
-    /**
-     * Update character animations based on state and balance
-     */
-    updateAnimations() {
-        const stateChanged = this.prevState !== this.state;
-        const balanceChanged = Math.abs(this.prevBalance - this.balance) > 0.2;
-        
-        if (stateChanged || balanceChanged) {
-            switch (this.state) {
-                case 'IDLE':
-                    this.playIdleAnimation();
-                    break;
-                case 'WALKING':
-                    this.playWalkingAnimation();
-                    break;
-                case 'BALANCING':
-                    this.playBalancingAnimation();
-                    break;
-                case 'FALLING':
-                    this.playFallingAnimation();
-                    break;
-            }
-            
-            this.prevState = this.state;
-            this.prevBalance = this.balance;
-        }
-        
-        // Continuously update animation parameters
-        const deltaTime = this.animationClock.getDelta();
-        
-        // Update walk cycle
-        if (this.state === 'WALKING') {
-            this.walkCycle += deltaTime * this.speed * 3;
-            
-            // Move legs in walking motion
-            const legAngle = Math.sin(this.walkCycle) * 0.3;
-            this.leftLeg.rotation.x = legAngle;
-            this.rightLeg.rotation.x = -legAngle;
-            
-            // Subtle arm movement during walking
-            const armAngle = Math.sin(this.walkCycle) * 0.15;
-            this.leftArm.rotation.x = -armAngle;
-            this.rightArm.rotation.x = armAngle;
-        }
-        
-        // Update balance animations
-        if (this.state === 'WALKING' || this.state === 'BALANCING') {
-            this.balanceCycle += deltaTime * 2;
-            
-            // Adjust arms based on balance
-            const balanceAdjustment = Math.abs(this.balance) * 0.7;
-            
-            if (this.balance < -0.1) {
-                // Leaning left - raise right arm
-                this.rightArm.rotation.z = -0.8 * balanceAdjustment;
-                this.leftArm.rotation.z = -0.2;
-                
-                // Tilt pole for counterbalance
-                this.balancePole.rotation.y = -this.balance * 0.2;
-            } else if (this.balance > 0.1) {
-                // Leaning right - raise left arm
-                this.leftArm.rotation.z = 0.8 * balanceAdjustment;
-                this.rightArm.rotation.z = 0.2;
-                
-                // Tilt pole for counterbalance
-                this.balancePole.rotation.y = -this.balance * 0.2;
-            } else {
-                // Centered - normal arm position with subtle movement
-                const armSway = Math.sin(this.balanceCycle) * 0.05;
-                this.leftArm.rotation.z = -0.2 + armSway;
-                this.rightArm.rotation.z = 0.2 - armSway;
-                this.balancePole.rotation.y = armSway * 2;
-            }
-            
-            // Add subtle body sway
-            const bodySway = Math.sin(this.balanceCycle * 1.5) * 0.02;
-            this.head.rotation.z = bodySway;
-            this.torso.rotation.z = bodySway;
-        }
-    }
-    
-    /**
-     * Play balancing animation
-     */
-    playBalancingAnimation() {
-        // Arms out for balance
-        this.leftArm.rotation.set(0, 0, -0.5);
-        this.rightArm.rotation.set(0, 0, 0.5);
-        
-        // Subtle knee bend
-        this.leftLeg.rotation.x = 0.1;
-        this.rightLeg.rotation.x = 0.1;
-    }
-    
-    /**
-     * Play falling animation
-     */
-    playFallingAnimation() {
-        // Arms flailing
-        const fallRotation = Math.sign(this.balance) * Math.PI / 2;
-        this.leftArm.rotation.set(0.5, 0, -0.8);
-        this.rightArm.rotation.set(0.5, 0, 0.8);
-        
-        // Legs kicking
-        this.leftLeg.rotation.set(0.5, 0, 0);
-        this.rightLeg.rotation.set(-0.3, 0, 0);
-        
-        // Panic expression - head tilted back
-        this.head.rotation.set(0.3, 0, 0);
-    }
-    
-    /**
-     * Start moving the character forward (called on key down)
-     */
-    moveForward() {
-        console.log("moveForward called, isOnPlatform:", this.isOnPlatform);
-        
-        if (this.isOnPlatform) {
-            // Platform movement
-            this.platformMovement.forward = true;
-            this.state = 'WALKING';
-            console.log("Platform walking forward activated");
-        } else {
-            // Rope movement
-            this.isMovingForward = true;
-        }
-    }
-    
-    /**
-     * Stop moving the character forward (called on key up)
-     */
-    stopMoving() {
-        if (this.isOnPlatform) {
-            // Platform movement
-            this.platformMovement.forward = false;
-            
-            // If no movement keys are pressed, go to idle
-            if (!this.isAnyMovementKeyPressed()) {
-                this.state = 'IDLE';
-            }
-        } else {
-            // Rope movement
-            this.isMovingForward = false;
-            
-            // If not taking a step, immediately go to balancing state
-            if (!this.takingStep) {
-                this.state = 'BALANCING';
-            }
-        }
-    }
-    
-    /**
-     * Move backward (S key pressed)
-     */
-    moveBackward() {
-        console.log("moveBackward called, isOnPlatform:", this.isOnPlatform);
-        
-        if (this.isOnPlatform) {
-            this.platformMovement.backward = true;
-            this.state = 'WALKING';
-            console.log("Platform walking backward activated");
-        }
-        // No backward movement on rope
-    }
-    
-    /**
-     * Stop moving backward (S key released)
-     */
-    stopMovingBackward() {
-        if (this.isOnPlatform) {
-            this.platformMovement.backward = false;
-            
-            // If no movement keys are pressed, go to idle
-            if (!this.isAnyMovementKeyPressed()) {
-                this.state = 'IDLE';
-            }
-        }
-    }
-    
-    /**
-     * Move left (A key pressed)
-     */
-    moveLeft() {
-        console.log("moveLeft called, isOnPlatform:", this.isOnPlatform);
-        
-        if (this.isOnPlatform) {
-            this.platformMovement.left = true;
-            this.state = 'WALKING';
-            console.log("Platform walking left activated");
-        } else {
-            // On rope, adjust balance
-            this.adjustBalance(-1);
-        }
-    }
-    
-    /**
-     * Stop moving left (A key released)
-     */
-    stopMovingLeft() {
-        if (this.isOnPlatform) {
-            this.platformMovement.left = false;
-            
-            // If no movement keys are pressed, go to idle
-            if (!this.isAnyMovementKeyPressed()) {
-                this.state = 'IDLE';
-            }
-        } else {
-            // On rope, stop balance adjustment
-            this.adjustBalance(0);
-        }
-    }
-    
-    /**
-     * Move right (D key pressed)
-     */
-    moveRight() {
-        console.log("moveRight called, isOnPlatform:", this.isOnPlatform);
-        
-        if (this.isOnPlatform) {
-            this.platformMovement.right = true;
-            this.state = 'WALKING';
-            console.log("Platform walking right activated");
-        } else {
-            // On rope, adjust balance
-            this.adjustBalance(1);
-        }
-    }
-    
-    /**
-     * Stop moving right (D key released)
-     */
-    stopMovingRight() {
-        if (this.isOnPlatform) {
-            this.platformMovement.right = false;
-            
-            // If no movement keys are pressed, go to idle
-            if (!this.isAnyMovementKeyPressed()) {
-                this.state = 'IDLE';
-            }
-        } else {
-            // On rope, stop balance adjustment
-            this.adjustBalance(0);
-        }
-    }
-    
-    /**
-     * Check if any movement key is currently pressed
-     * @returns {boolean} True if any movement key is pressed
-     */
-    isAnyMovementKeyPressed() {
-        return this.platformMovement.forward ||
-               this.platformMovement.backward ||
-               this.platformMovement.left ||
-               this.platformMovement.right;
-    }
-    
-    /**
-     * Adjust character balance
-     * @param {number} direction - Direction to lean (-1 for left, 1 for right)
-     */
-    adjustBalance(direction) {
-        // Only apply balance force if on the rope
-        if (!this.isOnPlatform) {
-            this.balanceForce = direction;
-            
-            // Immediately update arm positions for responsive feel
-            if (direction < 0) {
-                // Leaning left - raise right arm
-                const intensity = Math.abs(direction) * 0.7;
-                this.rightArm.rotation.z = -0.8 * intensity;
-                this.balancePole.rotation.y = 0.3 * intensity;
-            } else if (direction > 0) {
-                // Leaning right - raise left arm
-                const intensity = Math.abs(direction) * 0.7;
-                this.leftArm.rotation.z = 0.8 * intensity;
-                this.balancePole.rotation.y = -0.3 * intensity;
-            }
-        }
-    }
-    
-    /**
-     * Set the current wind effect on the character
-     * @param {number} windForce - Force of wind (-1 to 1)
-     */
-    setWindEffect(windForce) {
-        this.windEffect = windForce;
-    }
-    
-    /**
-     * Reset character position to start of rope
-     */
-    resetPosition() {
-        this.position = 0;
-        this.balance = 0;
-        this.speed = 0;
-        this.state = 'IDLE';
-        this.balanceForce = 0;
-        this.isOnPlatform = true;
-        this.isMovingForward = false;
-        this.windEffect = 0;
-        
-        // Reset platform movement flags
-        this.platformMovement.forward = false;
-        this.platformMovement.backward = false;
-        this.platformMovement.left = false;
-        this.platformMovement.right = false;
-        
-        // Reset platform position to ensure we start at the right place
-        this.platformPosition = new THREE.Vector3();
-        
-        // Reset pole to one hand for platform movement
-        this.poleHoldMode = 'ONE_HAND';
-        this.updatePolePosition();
-        
-        this.updatePosition();
-    }
-    
-    /**
-     * Update character state and position
-     * @param {number} deltaTime - Time since last update in seconds
-     */
-    update(deltaTime) {
-        // Handle platform movement if on platform
-        if (this.isOnPlatform) {
-            this.updatePlatformMovement(deltaTime);
-            this.updatePosition();
+    updatePose(deltaTime, distance, speed) {
+        const c = this.config;
+        const ropeBlend = this.ropeBlend;
+        const poleBlend = this.poleBlend;
+
+        if (this.mode === MODES.FALLING) {
+            this.updateFallingPose();
             return;
         }
-        
-        // Handle step-based movement
-        if (this.takingStep) {
-            // Update step timer
-            this.stepTimer += deltaTime;
-            
-            // Calculate progress (0 to 1)
-            const stepProgress = Math.min(1, this.stepTimer / this.stepTime);
-            
-            // Use easing for smoother step motion
-            const easedProgress = this.easeInOutQuad(stepProgress);
-            
-            // Update position along rope
-            this.position = this.stepStartPosition + 
-                            (this.stepTargetPosition - this.stepStartPosition) * easedProgress;
-            
-            // Check if step is complete
-            if (stepProgress >= 1) {
-                this.takingStep = false;
-                
-                // If still holding forward key, immediately start next step
-                if (this.isMovingForward && this.position < 0.98) {
-                    this.startNewStep();
-                } else {
-                    this.state = 'BALANCING'; // Return to balancing after step
-                }
-                
-                // Apply additional balance disturbance at the end of a step
-                if (this.totalStepsTaken > 10) {
-                    // After 10 steps, add an extra wobble at the end
-                    const endStepWobble = 0.03 * this.balanceDifficulty;
-                    this.balance += (Math.random() - 0.5) * endStepWobble;
-                }
-            }
-        } else {
-            // Check if we should start a new step (when W is held down)
-            if (this.isMovingForward && this.position < 0.98) {
-                this.startNewStep();
-            }
-            
-            // NOT stepping - help regain balance
-            if (Math.abs(this.balance) > 0.1) {
-                // Apply recovery force in opposite direction of current balance
-                const recoveryForce = -Math.sign(this.balance) * 
-                                     this.balanceRecoveryRate * deltaTime;
-                this.balance += recoveryForce;
-            }
-            
-            // Gradually reduce balance difficulty when standing still for a while
-            if (!this.takingStep && this.stepTimer > 2.0) {
-                this.balanceDifficulty = Math.max(1, this.balanceDifficulty - deltaTime * 0.3);
-            }
-            
-            // Update state based on whether balancing or idle
-            if (Math.abs(this.balance) > 0.3) {
-                this.state = 'BALANCING';
-            } else {
-                this.state = 'IDLE';
-            }
+
+        // --- Gait ---------------------------------------------------------
+        const referenceSpeed = lerp(c.platformWalkSpeed, c.ropeWalkSpeed, ropeBlend);
+        const gaitTarget = clamp(speed / referenceSpeed, 0, 1);
+        this.gaitAmount += (gaitTarget - this.gaitAmount) * damp(8, deltaTime);
+
+        const maxStride = lerp(c.platformStride, c.ropeStride, ropeBlend);
+        const stride = Math.max(0.08, maxStride * this.gaitAmount);
+        const previousStep = Math.floor(this.gaitPhase / Math.PI);
+        this.gaitPhase += (distance / stride) * Math.PI;
+        if (Math.floor(this.gaitPhase / Math.PI) !== previousStep) {
+            this.handleFootfall();
         }
-        
-        // Add periodic balance noise for more realistic balancing challenge
-        this.balanceNoiseTimer += deltaTime;
-        if (this.balanceNoiseTimer >= this.balanceNoiseInterval) {
-            this.balanceNoiseTimer = 0;
-            
-            // Apply random disturbance (affected by wind and difficulty)
-            const randomNoise = (Math.random() - 0.5) * 
-                              this.balanceNoiseMagnitude * this.balanceDifficulty;
-            
-            // Wind increases noise and biases it in the wind direction
-            const windNoise = this.windEffect * 
-                            this.balanceNoiseMagnitude * 0.4 * this.balanceDifficulty;
-            
-            this.balance += randomNoise + windNoise;
+
+        const fade = THREE.MathUtils.smoothstep(this.gaitAmount, 0, 0.15);
+        const halfStride = (stride / 2) * fade;
+        const sin = Math.sin(this.gaitPhase);
+        const cos = Math.cos(this.gaitPhase);
+        // Mostly-linear foot travel while planted, softened at the turnarounds
+        const wave = 0.8 * (2 / Math.PI) * Math.asin(sin) + 0.2 * sin;
+
+        const thighAngle = Math.asin(clamp((halfStride * wave) / LEG, -0.9, 0.9));
+        const baseKnee = lerp(0.04, 0.18, ropeBlend);
+        const swingKnee = (1.6 * halfStride) / LEG + 0.15 * fade;
+
+        const legState = {
+            left: { thigh: -thighAngle, knee: baseKnee + swingKnee * Math.max(0, cos) },
+            right: { thigh: thighAngle, knee: baseKnee + swingKnee * Math.max(0, -cos) }
+        };
+
+        const hipWidth = lerp(0.1, 0.035, ropeBlend);
+        for (const name of ['left', 'right']) {
+            const leg = this.legs[name];
+            const state = legState[name];
+            leg.thigh.position.x = leg.side * hipWidth;
+            leg.thigh.rotation.x = state.thigh;
+            leg.knee.rotation.x = state.knee;
+            // Keep the sole parallel to the ground; turn feet out on the rope
+            leg.foot.rotation.x = -(state.thigh + state.knee);
+            leg.foot.rotation.y = leg.side * 0.35 * ropeBlend;
         }
-        
-        // Apply player's balance force (inversely proportional to difficulty)
-        this.balance += (this.balanceForce * deltaTime * 2) / (Math.sqrt(this.balanceDifficulty) * 0.6);
-        
-        // Apply direct wind effect on balance
-        this.balance += this.windEffect * deltaTime * 0.3 * this.balanceDifficulty;
-        
-        // Ensure balance stays within range [-1, 1]
-        this.balance = Math.max(-1, Math.min(1, this.balance));
-        
-        // Update character state based on balance
-        this.updateState();
-        
-        // Update position visually
-        this.updatePosition();
-        
-        // Step timer for balance recovery
-        if (!this.takingStep) {
-            this.stepTimer += deltaTime;
-        }
-        
-        // Check if reached the end platform
-        if (this.position >= 0.98) {
-            this.transitionToEndPlatform();
-        }
+
+        // Hip height from the planted leg: natural rise and fall, never floating
+        const stance = cos >= 0 ? legState.right : legState.left;
+        this.body.position.y = THIGH * Math.cos(stance.thigh) +
+            SHIN * Math.cos(stance.thigh + stance.knee) + FOOT_HEIGHT;
+        // Weight shifts over the planted foot on the platform
+        this.body.position.x = -0.02 * cos * fade * (1 - ropeBlend);
+
+        // --- Upper body ---------------------------------------------------
+        const breathing = Math.sin(this.time * 1.8) * 0.015;
+        this.spine.rotation.set(
+            breathing + 0.05 * ropeBlend,
+            -0.12 * wave * fade,
+            -this.lean * 0.35 * poleBlend
+        );
+
+        // Head stays level and looks ahead
+        this.head.rotation.set(0.08 * ropeBlend, 0.06 * wave * fade * (1 - ropeBlend), -this.lean * 0.5);
+
+        // Arms: blend between carrying the pole and balancing with it
+        const leanShift = this.lean * 0.5 * poleBlend;
+        const armSwing = 1.1 * halfStride * wave;
+        const left = this.arms.left;
+        const right = this.arms.right;
+
+        left.upper.rotation.set(lerp(armSwing, -0.5, poleBlend), 0, lerp(0.08, 0, poleBlend) + leanShift);
+        left.elbow.rotation.set(lerp(-0.25 - 0.15 * fade, -0.9, poleBlend), 0, 0);
+
+        right.upper.rotation.set(lerp(-0.15 - 0.3 * armSwing, -0.5, poleBlend), 0, lerp(-0.08, 0, poleBlend) + leanShift);
+        right.elbow.rotation.set(lerp(-0.5, -0.9, poleBlend), 0, 0);
+
+        // Pole: carried along the body, or held across and counter-tilted
+        this.pole.position.lerpVectors(POLE_CARRY_POSITION, POLE_BALANCE_POSITION, poleBlend);
+        this.pole.position.x += Math.sin(leanShift) * 0.3;
+        this.pole.quaternion.slerpQuaternions(POLE_CARRY_QUATERNION, POLE_BALANCE_QUATERNION, poleBlend);
+        this._qPole.setFromAxisAngle(AXIS_Z, -this.lean * 1.3 * poleBlend);
+        this.pole.quaternion.premultiply(this._qPole);
     }
-    
-    /**
-     * Easing function for smoother step movement
-     * @param {number} t - Progress from 0 to 1
-     * @returns {number} - Eased value from 0 to 1
-     */
-    easeInOutQuad(t) {
-        return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+    updateFallingPose() {
+        const t = this.fall.time;
+        const flail = Math.sin(t * 12);
+
+        this.arms.left.upper.rotation.set(-2.2 + 0.6 * flail, 0, 1.1 + 0.3 * flail);
+        this.arms.right.upper.rotation.set(-2.2 - 0.6 * flail, 0, -1.1 + 0.3 * flail);
+        this.arms.left.elbow.rotation.set(-0.4, 0, 0);
+        this.arms.right.elbow.rotation.set(-0.4, 0, 0);
+
+        this.legs.left.thigh.rotation.x = -0.6 + 0.5 * Math.sin(t * 9);
+        this.legs.right.thigh.rotation.x = -0.2 - 0.5 * Math.sin(t * 9);
+        this.legs.left.knee.rotation.x = 0.9;
+        this.legs.right.knee.rotation.x = 0.5;
+
+        this.head.rotation.set(-0.4, 0, 0);
+        this.spine.rotation.set(-0.2, 0, 0);
     }
-    
-    /**
-     * Update character state based on balance and speed
-     */
-    updateState() {
-        // Only change state if not on platform
-        if (this.isOnPlatform) return;
-        
-        // Already falling
-        if (this.state === 'FALLING') return;
-        
-        // Taking a step overrides other states
-        if (this.takingStep) {
-            this.state = 'WALKING';
-            return;
-        }
-        
-        // Determine state based on balance
-        const absBalance = Math.abs(this.balance);
-        
-        if (absBalance > 0.9) {
-            // Too much imbalance, fall off
-            this.state = 'FALLING';
-        } else if (absBalance > 0.5) {
-            // Not moving but struggling with balance
-            this.state = 'BALANCING';
-        } else {
-            // Standing still with good balance
-            this.state = 'IDLE';
-        }
-    }
-    
-    /**
-     * Start a new step forward
-     * Helper method to encapsulate step initialization logic
-     */
-    startNewStep() {
-        this.takingStep = true;
-        this.stepTimer = 0;
-        this.stepStartPosition = this.position;
-        this.stepTargetPosition = Math.min(1, this.position + this.stepDistance);
-        
-        // Set walking state immediately
-        this.state = 'WALKING';
-        
-        // Apply balance disturbance for this step
-        const stepDisturbance = this.movementBalanceEffect * this.balanceDifficulty;
-        const randomDirection = (Math.random() - 0.5 + this.windEffect * 0.2);
-        this.balance += stepDisturbance * randomDirection;
-        
-        // Increase total steps count
-        this.totalStepsTaken++;
-        
-        // Increase difficulty based on total steps taken
-        if (this.totalStepsTaken > 5) {
-            // Every 5 steps makes it harder
-            const targetDifficulty = 1 + Math.min(this.maxBalanceDifficulty - 1, 
-                (this.totalStepsTaken / 20) * (this.maxBalanceDifficulty - 1));
-            
-            this.balanceDifficulty = Math.min(this.balanceDifficulty + 0.2, targetDifficulty);
-        }
-    }
-    
-    /**
-     * Update movement on platform
-     * @param {number} deltaTime - Time since last update
-     */
-    updatePlatformMovement(deltaTime) {
-        if (!this.isOnPlatform) return;
-        
-        // For debugging: log movement flags
-        console.log("Platform movement flags:", 
-            "W:", this.platformMovement.forward, 
-            "S:", this.platformMovement.backward, 
-            "A:", this.platformMovement.left, 
-            "D:", this.platformMovement.right,
-            "Q:", this.platformMovement.rotateLeft,
-            "E:", this.platformMovement.rotateRight);
-        
-        // Handle rotation first (Q and E keys)
-        if (this.platformMovement.rotateLeft) {
-            // Rotate counterclockwise
-            this.facingDirection += this.platformRotationSpeed * deltaTime;
-            
-            // Update character rotation
-            this.model.rotation.y = this.facingDirection;
-        }
-        
-        if (this.platformMovement.rotateRight) {
-            // Rotate clockwise
-            this.facingDirection -= this.platformRotationSpeed * deltaTime;
-            
-            // Update character rotation
-            this.model.rotation.y = this.facingDirection;
-        }
-        
-        // Calculate movement direction based on keys pressed
-        let moveX = 0;
-        let moveZ = 0;
-        
-        // Forward/backward in the direction character is facing
-        if (this.platformMovement.forward) {
-            moveZ += Math.cos(this.facingDirection);
-            moveX += Math.sin(this.facingDirection);
-        }
-        if (this.platformMovement.backward) {
-            moveZ -= Math.cos(this.facingDirection);
-            moveX -= Math.sin(this.facingDirection);
-        }
-        
-        // Left/right perpendicular to facing direction
-        if (this.platformMovement.left) {
-            moveZ -= Math.sin(this.facingDirection);
-            moveX += Math.cos(this.facingDirection);
-        }
-        if (this.platformMovement.right) {
-            moveZ += Math.sin(this.facingDirection);
-            moveX -= Math.cos(this.facingDirection);
-        }
-        
-        // Store movement direction for animation
-        if (moveX !== 0 || moveZ !== 0) {
-            this.lastMovementDirection.set(moveX, moveZ).normalize();
-        }
-        
-        // Calculate current speed
-        const isMoving = moveX !== 0 || moveZ !== 0;
-        const isRotating = this.platformMovement.rotateLeft || this.platformMovement.rotateRight;
-        
-        // Apply movement and animations
-        if (isMoving) {
-            // Normalize movement vector if moving diagonally
-            const length = Math.sqrt(moveX * moveX + moveZ * moveZ);
-            moveX /= length;
-            moveZ /= length;
-            
-            // Walking speed varies based on proximity to rope
-            let currentSpeed = this.platformSpeed;
-            if (this.nearRope) {
-                currentSpeed *= 0.6; // Slow down near rope
-            } else if (this.onRopeEdge) {
-                currentSpeed *= 0.4; // Even slower at rope edge
-            }
-            
-            // Apply movement speed
-            moveX *= currentSpeed * deltaTime;
-            moveZ *= currentSpeed * deltaTime;
-            
-            // Track velocity for animation smoothing
-            this.playerVelocity.set(moveX / deltaTime, 0, moveZ / deltaTime);
-            
-            // Update position - apply movement regardless of keys pressed
-            this.platformPosition.x += moveX;
-            this.platformPosition.z += moveZ;
-            console.log("Platform position updated:", this.platformPosition.x.toFixed(2), this.platformPosition.z.toFixed(2));
-            
-            // Keep character on platform
-            this.constrainToPlatform();
-            
-            // Update animation state
-            if (this.state !== 'WALKING') {
-                this.state = 'WALKING';
-                this.playWalkingAnimation();
-            }
-            
-            // Update footstep cycle
-            this.footstepCycle += deltaTime * currentSpeed * 5;
-            
-            // Check for footstep sounds/effects
-            this.lastFootstep += deltaTime;
-            if (this.lastFootstep >= this.footstepInterval) {
-                this.lastFootstep = 0;
-                this.createFootstepEffect();
-            }
-            
-            // Update walking animations
-            this.updateWalkingAnimations(deltaTime);
-            
-        } else if (isRotating) {
-            // Player is rotating in place
-            if (this.state !== 'WALKING') {
-                // Use walking animation when rotating in place 
-                this.state = 'WALKING';
-                this.playWalkingAnimation();
-            }
-            
-            // Slower animation for rotation-only
-            this.footstepCycle += deltaTime * this.platformRotationSpeed * 2;
-            
-            // Update walking animations with slower pace
-            this.updateWalkingAnimations(deltaTime);
-        } else {
-            // Slowing down - not moving or rotating
-            this.playerVelocity.multiplyScalar(0.9);
-            
-            // Reset footstep timer when stopped
-            this.lastFootstep = this.footstepInterval;
-            
-            // Change state to idle if previously walking
-            if (this.state === 'WALKING') {
-                this.state = 'IDLE';
-                this.playIdleAnimation();
-            }
-        }
-    }
-    
-    /**
-     * Create footstep effect (visual or sound)
-     * In a full implementation, this would play a sound and maybe create a dust particle
-     */
-    createFootstepEffect() {
-        // Left or right foot based on cycle
-        const isLeftFoot = Math.sin(this.footstepCycle) > 0;
-        
-        // In a full implementation, this is where you would:
-        // 1. Play footstep sound
-        // 2. Create footstep particle effect
-        console.log(`Footstep: ${isLeftFoot ? 'Left' : 'Right'} foot${this.nearRope ? ' (careful)' : ''}`);
-    }
-    
-    /**
-     * Update walking animations
-     * @param {number} deltaTime - Time since last update
-     */
-    updateWalkingAnimations(deltaTime) {
-        // Determine movement speed for animation pacing
-        const speed = this.playerVelocity.length();
-        
-        // Leg movements
-        const legAngle = Math.sin(this.footstepCycle) * 0.4; // Increased range for more natural walking
-        this.leftLeg.rotation.x = legAngle;
-        this.rightLeg.rotation.x = -legAngle;
-        
-        // Arm swing animations
-        if (this.nearRope || this.onRopeEdge || !this.naturalArmSwing) {
-            // Near rope - arms prepared for balance
-            this.leftArm.rotation.x = 0;
-            this.rightArm.rotation.x = 0;
-        } else {
-            // Natural arm swings while walking
-            // Arms swing opposite to legs
-            const armAngle = -Math.sin(this.footstepCycle) * 0.3;
-            this.leftArm.rotation.x = armAngle;
-            
-            // Right arm has reduced swing because it's holding the pole
-            this.rightArm.rotation.x = armAngle * 0.3;
-        }
-        
-        // Torso twist for natural walking
-        this.torso.rotation.y = Math.sin(this.footstepCycle) * 0.05;
-        
-        // Head looks slightly in the direction of movement
-        if (!this.nearRope && !this.onRopeEdge) {
-            this.head.rotation.y = Math.sin(this.footstepCycle * 0.5) * 0.05;
-        }
-        
-        // Special animations for strafing (A/D without W/S)
-        const isStrafing = (this.platformMovement.left || this.platformMovement.right) && 
-                         !(this.platformMovement.forward || this.platformMovement.backward);
-                         
-        if (isStrafing && this.isOnPlatform) {
-            // Tilt body into the strafe
-            if (this.platformMovement.left) {
-                this.torso.rotation.z = Math.max(-0.15, this.torso.rotation.z - 0.02);
-            } else if (this.platformMovement.right) {
-                this.torso.rotation.z = Math.min(0.15, this.torso.rotation.z + 0.02);
-            }
-        } else {
-            // Return to upright gradually
-            this.torso.rotation.z *= 0.9;
-        }
-    }
-    
-    /**
-     * Transition from platform to rope with appropriate animation
-     */
-    transitionToRope() {
-        console.log("Transitioning to rope...");
-        
-        // Play transition animation (could be expanded)
-        this.poleHoldMode = 'TWO_HAND';
-        this.updatePolePosition();
-        
-        // Switch to rope walking
-        this.isOnPlatform = false;
-        this.position = 0; // Start at beginning of rope
-        this.balance = 0;  // Reset balance
-        this.state = 'WALKING';
-        
-        // Reset platform movement flags
-        this.platformMovement.forward = false;
-        this.platformMovement.backward = false;
-        this.platformMovement.left = false;
-        this.platformMovement.right = false;
-        this.platformMovement.rotateLeft = false;
-        this.platformMovement.rotateRight = false;
-        
-        // Start moving forward on rope if W is still pressed
-        this.isMovingForward = true; // Start moving forward immediately
-        
-        // Start a step right away for immediate feedback
-        this.startNewStep();
-        
-        // Reset animation parameters
-        this.footstepCycle = 0;
-        this.lastFootstep = 0;
-        this.bodyBobHeight = 0;
-        
-        // Update position to align with rope start
-        this.updatePosition();
-        
-        console.log("Transition complete. isOnPlatform:", this.isOnPlatform, "isMovingForward:", this.isMovingForward);
-    }
-    
-    /**
-     * Transition to end platform when reaching end of rope
-     */
-    transitionToEndPlatform() {
-        this.isOnPlatform = true;
-        
-        // Position on end platform
-        if (this.environment && this.environment.endPlatformPosition) {
-            const platformPos = this.environment.endPlatformPosition;
-            const platformRadius = this.environment.platformRadius;
-            
-            // Position at edge of platform near rope
-            this.platformPosition.copy(platformPos);
-            
-            // Offset slightly from edge
-            const curve = this.rope.geometry.parameters.path;
-            const ropeEndPoint = curve.getPointAt(1);
-            const dirToCenter = new THREE.Vector3()
-                .copy(platformPos)
-                .sub(ropeEndPoint)
-                .normalize();
-            
-            this.platformPosition.add(dirToCenter.multiplyScalar(this.width));
-            
-            // Set facing direction toward center of platform
-            this.facingDirection = Math.atan2(dirToCenter.x, dirToCenter.z);
-        }
-        
-        // Reset rope properties
-        this.position = 1;
-        this.balance = 0;
-        this.state = 'IDLE';
-        this.balanceForce = 0;
-        this.isMovingForward = false;
-        this.takingStep = false;
-        this.totalStepsTaken = 0;
-        this.balanceDifficulty = 1;
-        
-        this.playIdleAnimation();
-    }
-    
-    /**
-     * Constrain character movement to platform boundaries
-     * With a wider opening at the rope connection point
-     */
-    constrainToPlatform() {
-        if (!this.environment) return;
-        
-        // Current platform
-        let platformPos, platformRadius;
-        
-        if (this.environment.startPlatformPosition && this.platformPosition.distanceTo(this.environment.startPlatformPosition) < 
-            this.platformPosition.distanceTo(this.environment.endPlatformPosition || new THREE.Vector3(0, 0, 0))) {
-            // On start platform
-            platformPos = this.environment.startPlatformPosition;
-            platformRadius = this.environment.platformRadius;
-        } else if (this.environment.endPlatformPosition) {
-            // On end platform
-            platformPos = this.environment.endPlatformPosition;
-            platformRadius = this.environment.platformRadius;
-        } else {
-            return;
-        }
-        
-        // Calculate distance from platform center (XZ plane only)
-        const dx = this.platformPosition.x - platformPos.x;
-        const dz = this.platformPosition.z - platformPos.z;
-        const distanceFromCenter = Math.sqrt(dx * dx + dz * dz);
-        
-        // Get the rope start point
-        const ropeStartPoint = this.rope.geometry.parameters.path.getPointAt(0);
-        
-        // Distance to rope
-        const distanceToRope = this.platformPosition.distanceTo(ropeStartPoint);
-        
-        // If very close to the rope, allow movement regardless of platform boundaries
-        if (distanceToRope < 1.5) {
-            console.log("Close to rope - allowing unrestricted movement");
-            
-            // If W is pressed and very close to rope, attempt transition
-            if (this.platformMovement.forward && distanceToRope < 1.0) {
-                console.log("FORCING rope transition from constrainToPlatform");
-                this.transitionToRope();
-            }
-            
-            return; // Skip platform edge constraints
-        }
-        
-        // If beyond platform edge, constrain
-        if (distanceFromCenter > platformRadius - this.width/2) {
-            // Calculate normalized direction from center
-            const dirX = dx / distanceFromCenter;
-            const dirZ = dz / distanceFromCenter;
-            
-            // Direction from platform center to rope
-            const ropeDir = new THREE.Vector3()
-                .subVectors(ropeStartPoint, platformPos)
-                .normalize();
-                
-            // Calculate angle between character's direction and rope direction
-            // Use dot product to find cosine of angle, then convert to degrees
-            const dotProduct = dirX * ropeDir.x + dirZ * ropeDir.z;
-            const angleCos = Math.max(-1, Math.min(1, dotProduct)); // Clamp to prevent floating point errors
-            const angleRadians = Math.acos(angleCos);
-            const angleDegrees = angleRadians * (180 / Math.PI);
-            
-            // If within the 30-degree opening near the rope, allow movement off platform
-            // (15 degrees on either side of the rope direction - much wider than before)
-            const isInRopeOpening = angleDegrees < 15; // Increased from 5 to 15 degrees
-            
-            // If character is trying to go beyond platform but not at rope opening, constrain
-            if (!isInRopeOpening) {
-                // Set position to edge of platform
-                const newRadius = platformRadius - this.width/2;
-                this.platformPosition.x = platformPos.x + dirX * newRadius;
-                this.platformPosition.z = platformPos.z + dirZ * newRadius;
-                
-                console.log("Constrained to platform edge, angle to rope:", angleDegrees.toFixed(1) + "°");
-            } else {
-                // Character is in the rope opening
-                console.log("Character in rope opening, angle to rope:", angleDegrees.toFixed(1) + "°");
-                
-                // If moving toward rope while in the opening, check if we should transition
-                if (this.platformMovement.forward) {
-                    // Vector of current movement
-                    const moveVec = new THREE.Vector3(
-                        Math.sin(this.facingDirection), 
-                        0, 
-                        Math.cos(this.facingDirection)
-                    );
-                    
-                    // Check if moving generally toward rope
-                    const movingTowardRope = moveVec.dot(ropeDir) > 0.3;
-                    
-                    if (movingTowardRope && distanceToRope < 3.0) {
-                        console.log("Moving toward rope in platform opening - initiating transition");
-                        this.transitionToRope();
-                    }
-                }
-            }
-        }
-    }
-    
-    /**
-     * Rotate the character to the left (Q key pressed)
-     */
-    rotateLeft() {
-        console.log("rotateLeft called, isOnPlatform:", this.isOnPlatform);
-        
-        if (this.isOnPlatform) {
-            this.platformMovement.rotateLeft = true;
-        }
-    }
-    
-    /**
-     * Stop rotating left (Q key released)
-     */
-    stopRotatingLeft() {
-        if (this.isOnPlatform) {
-            this.platformMovement.rotateLeft = false;
-        }
-    }
-    
-    /**
-     * Rotate the character to the right (E key pressed)
-     */
-    rotateRight() {
-        console.log("rotateRight called, isOnPlatform:", this.isOnPlatform);
-        
-        if (this.isOnPlatform) {
-            this.platformMovement.rotateRight = true;
-        }
-    }
-    
-    /**
-     * Stop rotating right (E key released)
-     */
-    stopRotatingRight() {
-        if (this.isOnPlatform) {
-            this.platformMovement.rotateRight = false;
+
+    handleFootfall() {
+        if (this.mode === MODES.ROPE && this.onFootfall) {
+            this.onFootfall(this.speedRatio);
         }
     }
 }
 
-export { Character }; 
+export { Character, MODES as CharacterModes };

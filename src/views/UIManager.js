@@ -106,10 +106,17 @@ class UIManager {
                 transform: translateY(0);
             }
             
+            .controls-panel .section {
+                padding-top: 8px;
+                font-weight: 700;
+                opacity: 0.8;
+            }
+
             .controls-panel {
                 position: absolute;
-                top: 20px;
+                bottom: 20px;
                 right: 20px;
+                pointer-events: none;
                 background-color: rgba(0, 0, 0, 0.7);
                 color: white;
                 padding: 15px;
@@ -185,25 +192,9 @@ class UIManager {
      * Set up event listeners for UI elements
      */
     setupEventListeners() {
-        // Start button click
-        this.playButton.addEventListener('click', () => {
-            this.game.gameState.changeState('GAMEPLAY');
-            this.hideStartScreen();
-            this.showGameplayUI();
-            this.game.cameraController.animateToGameplayPosition();
-        });
-        
-        // Try again button click
-        this.tryAgainButton.addEventListener('click', () => {
-            this.game.gameState.changeState('START_SCREEN');
-            this.hideEndScreen();
-            this.hideGameplayUI();
-            this.showStartScreen();
-            
-            // Reset game
-            this.game.character.resetPosition();
-            this.game.cameraController.animateToStartPosition();
-        });
+        // Both buttons start a fresh run from the start platform
+        this.playButton.addEventListener('click', () => this.game.startRun());
+        this.tryAgainButton.addEventListener('click', () => this.game.startRun());
     }
     
     /**
@@ -231,9 +222,9 @@ class UIManager {
                 break;
                 
             case 'END_SCREEN':
+                // The game calls showEndScreen() with the result message
                 this.hideStartScreen();
                 this.hideGameplayUI();
-                this.showEndScreen();
                 break;
         }
     }
@@ -303,9 +294,23 @@ class UIManager {
             controlsPanel.innerHTML = `
                 <h3>Controls</h3>
                 <table>
+                    <tr><td colspan="2" class="section">On the platform</td></tr>
+                    <tr>
+                        <td><span class="key">W</span><span class="key">S</span></td>
+                        <td>Walk forward / back</td>
+                    </tr>
+                    <tr>
+                        <td><span class="key">A</span><span class="key">D</span></td>
+                        <td>Step left / right</td>
+                    </tr>
+                    <tr>
+                        <td><span class="key">Q</span><span class="key">E</span></td>
+                        <td>Turn left / right</td>
+                    </tr>
+                    <tr><td colspan="2" class="section">On the rope</td></tr>
                     <tr>
                         <td><span class="key">W</span> / <span class="key">↑</span></td>
-                        <td>Move forward</td>
+                        <td>Walk forward</td>
                     </tr>
                     <tr>
                         <td><span class="key">A</span> / <span class="key">←</span></td>
@@ -315,21 +320,18 @@ class UIManager {
                         <td><span class="key">D</span> / <span class="key">→</span></td>
                         <td>Lean right</td>
                     </tr>
+                    <tr><td colspan="2" class="section">Camera</td></tr>
                     <tr>
-                        <td><span class="key">C</span></td>
-                        <td>Toggle camera mode</td>
-                    </tr>
-                    <tr>
-                        <td><span class="key">Left-click</span></td>
-                        <td>Orbit camera</td>
-                    </tr>
-                    <tr>
-                        <td><span class="key">Right-click</span></td>
-                        <td>Pan camera</td>
+                        <td><span class="key">Drag</span></td>
+                        <td>Look around</td>
                     </tr>
                     <tr>
                         <td><span class="key">Scroll</span></td>
-                        <td>Zoom camera</td>
+                        <td>Zoom</td>
+                    </tr>
+                    <tr>
+                        <td><span class="key">C</span></td>
+                        <td>Follow / free orbit</td>
                     </tr>
                 </table>
             `;
@@ -371,8 +373,10 @@ class UIManager {
         this.endMessage.textContent = message;
         
         // Calculate performance metrics
-        const elapsedTime = Math.floor(this.game.clock.elapsedTime);
-        const distance = Math.floor(this.game.character.position * 100);
+        const elapsedTime = Math.floor(this.game.runTime);
+        const ropeLength = this.game.environment.ropeLength;
+        const metersWalked = Math.round(this.game.character.progress * ropeLength);
+        const distance = `${metersWalked} m of ${Math.round(ropeLength)} m`;
         const minutes = Math.floor(elapsedTime / 60);
         const seconds = elapsedTime % 60;
         
@@ -385,7 +389,7 @@ class UIManager {
         if (message.includes('fell')) {
             this.performanceMetrics.innerHTML = `
                 <span style="color: #e74c3c;">❌ You lost your balance!</span><br>
-                Distance: ${distance}%<br>
+                Distance: ${distance}<br>
                 Time: ${timeString}
             `;
             this.endMessage.style.color = '#e74c3c';
@@ -454,7 +458,7 @@ class UIManager {
      */
     updateProgressBar() {
         if (this.progressBar && this.game.character) {
-            const progress = this.game.character.position * 100;
+            const progress = this.game.character.progress * 100;
             this.progressBar.style.width = `${progress}%`;
             
             // Change color as progress increases
@@ -473,51 +477,42 @@ class UIManager {
      */
     updateWindDirection() {
         const physics = this.game.physics;
-        
+        const character = this.game.character;
+
         if (!physics || !this.windDirectionElement) return;
-        
-        // No wind
-        if (physics.windForce === 0) {
-            this.windDirectionElement.textContent = 'None';
+
+        // Wind as the walker feels it: + pushes toward their right
+        const lateralWind = physics.wind * character.getRight().x;
+        const strength = Math.abs(lateralWind);
+        const percent = Math.round((strength / physics.config.maxWind) * 100);
+        const pushesRight = lateralWind > 0;
+
+        if (strength < 0.03) {
+            this.windDirectionElement.textContent = 'Calm';
             this.windDirectionElement.style.color = 'white';
+            this.windDirectionElement.style.animation = 'none';
             return;
         }
-        
-        // Determine wind direction and strength
-        let direction = '';
-        let color = '';
-        
-        if (physics.windDirection > 0.2) {
-            direction = 'Right';
-            color = '#3498db'; // Light blue
-        } else if (physics.windDirection < -0.2) {
-            direction = 'Left';
-            color = '#3498db'; // Light blue
+
+        let arrows;
+        let color;
+        if (strength > 0.45) {
+            arrows = pushesRight ? '→→→' : '←←←';
+            color = '#e74c3c';
+        } else if (strength > 0.2) {
+            arrows = pushesRight ? '→→' : '←←';
+            color = '#f39c12';
         } else {
-            direction = 'Mild';
-            color = 'white';
+            arrows = pushesRight ? '→' : '←';
+            color = '#3498db';
         }
-        
-        // Add strength indicator (arrows)
-        const strength = Math.abs(physics.windForce);
-        let arrows = '';
-        
-        if (strength > 0.35) {
-            arrows = physics.windDirection > 0 ? '→→→' : '←←←';
-            color = '#e74c3c'; // Red
-        } else if (strength > 0.15) {
-            arrows = physics.windDirection > 0 ? '→→' : '←←';
-            color = '#f39c12'; // Yellow/Orange
-        } else {
-            arrows = physics.windDirection > 0 ? '→' : '←';
-        }
-        
-        // Display wind information
-        this.windDirectionElement.innerHTML = `${direction} <span style="font-size: 22px;">${arrows}</span>`;
+
+        this.windDirectionElement.innerHTML =
+            `${pushesRight ? 'Right' : 'Left'} <span style="font-size: 22px;">${arrows}</span> ${percent}%`;
         this.windDirectionElement.style.color = color;
-        
+
         // Add subtle animation for strong wind
-        if (strength > 0.3) {
+        if (strength > 0.45) {
             this.windDirectionElement.style.animation = 'shake 0.5s infinite';
         } else {
             this.windDirectionElement.style.animation = 'none';

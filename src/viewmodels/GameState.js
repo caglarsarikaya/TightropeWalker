@@ -18,7 +18,7 @@ class GameState {
             'START_SCREEN': ['GAMEPLAY'],
             'GAMEPLAY': ['PAUSED', 'END_SCREEN'],
             'PAUSED': ['GAMEPLAY', 'START_SCREEN'],
-            'END_SCREEN': ['START_SCREEN']
+            'END_SCREEN': ['START_SCREEN', 'GAMEPLAY']
         };
     }
     
@@ -35,8 +35,6 @@ class GameState {
             console.warn(`Invalid state transition: ${this.currentState} -> ${newState}`);
             return false;
         }
-        
-        console.log(`State transition: ${this.currentState || 'NONE'} -> ${newState}`);
         
         // Store previous state
         this.previousState = this.currentState;
